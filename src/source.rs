@@ -5,6 +5,9 @@ use crate::ident;
 use std::path::{Path, PathBuf};
 
 mod deb;
+mod extract;
+
+pub use extract::{extract, list_payload};
 
 #[derive(Clone, Debug)]
 pub struct Script {
@@ -84,6 +87,27 @@ mod tests {
         assert_eq!(pkg.scripts.len(), 1);
         assert_eq!(pkg.scripts[0].name, "postinst");
         assert!(pkg.scripts[0].body.contains("update-desktop-database"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn extract_deb() {
+        let dir = std::env::temp_dir().join(format!("packager-extract-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let deb = dir.join("hello_1.0_amd64.deb");
+        crate::testpkg::write_deb(&deb, &crate::testpkg::DebSpec {
+            name: "hello".into(), version: "1.0".into(), arch: "amd64".into(),
+            depends: String::new(),
+            files: vec![("./usr/bin/hello".into(), b"hi\n".to_vec())],
+            postinst: None,
+        }).unwrap();
+        let mut pkg = parse_meta(&deb).unwrap();
+        let dest = dir.join("out");
+        extract(&mut pkg, &dest).unwrap();
+        assert_eq!(std::fs::read_to_string(dest.join("usr/bin/hello")).unwrap(), "hi\n");
+        assert!(pkg.file_list.iter().any(|f| f == "usr/bin/hello"), "{:?}", pkg.file_list);
+        let listed = list_payload(&deb).unwrap();
+        assert!(listed.iter().any(|f| f == "usr/bin/hello"), "{listed:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
