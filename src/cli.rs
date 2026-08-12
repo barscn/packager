@@ -1,5 +1,6 @@
-//! CLI flags, subcommands, and the scaffold pipeline.
+//! CLI flags, subcommands, and the scaffold/convert pipeline.
 
+use crate::build;
 use crate::depmap;
 use crate::error::{Error, Result};
 use crate::hooks;
@@ -102,8 +103,9 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> i32 {
                 return f(&cfg);
             }
             match cfg.cmd.as_str() {
-                "scaffold" => scaffold(&cfg),
-                "install" | "convert" | "status" | "forget" => {
+                "scaffold" => pipeline(&cfg, false),
+                "convert" => pipeline(&cfg, true),
+                "install" | "status" | "forget" => {
                     eprintln!("not implemented");
                     2
                 }
@@ -139,10 +141,16 @@ fn listed_dir(path: &str, all: &[String]) -> bool {
         .any(|other| other.trim_end_matches('/').starts_with(&prefix))
 }
 
-fn scaffold(cfg: &Config) -> i32 {
+/// Preview, then extract + write PKGBUILD. Convert also scans NEEDED and runs makepkg.
+fn pipeline(cfg: &Config, convert: bool) -> i32 {
+    let usage = if convert {
+        "usage: packager convert <file.deb|.rpm>"
+    } else {
+        "usage: packager scaffold <file.deb|.rpm>"
+    };
     let path = match &cfg.file {
         Some(p) => p,
-        None => return fail("usage: packager scaffold <file.deb|.rpm>"),
+        None => return fail(usage),
     };
 
     let mut pkg = match source::parse_meta(path) {
@@ -162,7 +170,7 @@ fn scaffold(cfg: &Config) -> i32 {
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
 
-    let depends = hooks::with_resolver(|r| depmap::map_names(&pkg.depends, r));
+    let mut depends = hooks::with_resolver(|r| depmap::map_names(&pkg.depends, r));
 
     let file_list = pkg.file_list.clone();
     let report = preview::evaluate(preview::Input {
@@ -197,21 +205,51 @@ fn scaffold(cfg: &Config) -> i32 {
         Some(w) => w.clone(),
         None => default_workdir(&report.pkgname, &report.pkgver),
     };
-    if let Err(e) = source::extract(&mut pkg, &workdir.join("payload")) {
+    let payload = workdir.join("payload");
+    if let Err(e) = source::extract(&mut pkg, &payload) {
         return fail(e);
+    }
+    if convert {
+        match union_needed(&pkg.depends, &payload) {
+            Ok(d) => depends = d,
+            Err(e) => return fail(e),
+        }
     }
     if let Err(e) = pkgbuild::write(
         &pkg,
         &depends,
         &pkgbuild::Options {
             allow_scripts: cfg.allow_scripts,
-            workdir,
+            workdir: workdir.clone(),
             payload_rel: "payload".into(),
         },
     ) {
         return fail(e);
     }
+    if convert {
+        if let Err(e) = build::makepkg(&workdir) {
+            return fail(e);
+        }
+    }
     0
+}
+
+/// `needed_names` ∪ declared depends → `map_names`, adding new Extra hits.
+fn union_needed(declared: &[String], payload: &Path) -> Result<depmap::Buckets> {
+    let infos = hooks::scan(payload)?;
+    let sonames: Vec<String> = infos
+        .iter()
+        .flat_map(|i| i.needed.iter().cloned())
+        .collect();
+    Ok(hooks::with_resolver(|r| {
+        let mut b = depmap::map_names(declared, r);
+        for n in depmap::needed_names(&sonames, r) {
+            if !b.extra.iter().any(|e| e == &n) {
+                b.extra.push(n);
+            }
+        }
+        b
+    }))
 }
 
 #[cfg(test)]
@@ -418,5 +456,232 @@ mod tests {
             "candidates() must query alias google-chrome"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn has_makepkg() -> bool {
+        std::process::Command::new("makepkg")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    #[ignore = "needs makepkg"]
+    fn convert_builds_archive_without_install_script() {
+        assert!(has_makepkg());
+        let _l = crate::hooks::set_lookup(none_lookup());
+        let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let wd = std::env::temp_dir().join(format!("packager-cv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wd);
+        let code = run([
+            "convert".into(),
+            "-y".into(),
+            write_hello_deb().to_string_lossy().into(),
+            "--workdir".into(),
+            wd.to_string_lossy().into(),
+        ]);
+        assert_eq!(code, 0);
+        let pkg = std::fs::read_dir(&wd)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".pkg.tar")
+            })
+            .expect("archive");
+        let listing = String::from_utf8(
+            std::process::Command::new("bsdtar")
+                .args(["-tf", pkg.to_str().unwrap()])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        assert!(listing.contains("usr/bin/hello"), "{listing}");
+        assert!(
+            !listing
+                .split('\n')
+                .any(|l| l.ends_with(".INSTALL") || l == ".INSTALL"),
+            "{listing}"
+        );
+        let _ = std::fs::remove_dir_all(wd);
+    }
+
+    #[test]
+    #[ignore = "needs makepkg"]
+    fn convert_allow_scripts_embeds_install() {
+        assert!(has_makepkg());
+        let _l = crate::hooks::set_lookup(none_lookup());
+        let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let wd = std::env::temp_dir().join(format!("packager-cvs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wd);
+        let code = run([
+            "convert".into(),
+            "-y".into(),
+            "--allow-scripts".into(),
+            write_hello_deb().to_string_lossy().into(),
+            "--workdir".into(),
+            wd.to_string_lossy().into(),
+        ]);
+        assert_eq!(code, 0);
+        let pkg = std::fs::read_dir(&wd)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".pkg.tar")
+            })
+            .expect("archive");
+        let listing = String::from_utf8(
+            std::process::Command::new("bsdtar")
+                .args(["-tf", pkg.to_str().unwrap()])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        assert!(listing.contains(".INSTALL"), "{listing}");
+        let _ = std::fs::remove_dir_all(wd);
+    }
+
+    #[test]
+    fn convert_needed_union() {
+        struct Res;
+        impl depmap::Resolver for Res {
+            fn which(&self, name: &str) -> Option<(String, String)> {
+                if name == "libssl.so.3" {
+                    Some(("openssl".into(), "extra".into()))
+                } else {
+                    None
+                }
+            }
+        }
+        let _l = crate::hooks::set_lookup(none_lookup());
+        let _r = crate::hooks::set_resolver(Box::new(Res));
+        let _s = crate::hooks::set_scan(|_| {
+            Ok(vec![crate::elfinfo::Info {
+                path: "usr/bin/hello".into(),
+                class: "ELF64".into(),
+                interpreter: "/lib64/ld-linux-x86-64.so.2".into(),
+                needed: vec!["libssl.so.3".into()],
+            }])
+        });
+        let wd = std::env::temp_dir().join(format!("packager-need-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wd);
+        let code = run([
+            "scaffold".into(),
+            "-y".into(),
+            write_hello_deb().to_string_lossy().into(),
+            "--workdir".into(),
+            wd.to_string_lossy().into(),
+        ]);
+        // convert path is what must scan; if makepkg missing, still run convert and
+        // accept exit != 0 from makepkg *after* PKGBUILD mentions openssl.
+        let _ = run([
+            "convert".into(),
+            "-y".into(),
+            write_hello_deb().to_string_lossy().into(),
+            "--workdir".into(),
+            wd.to_string_lossy().into(),
+        ]);
+        let pb = std::fs::read_to_string(wd.join("PKGBUILD")).unwrap_or_default();
+        assert!(
+            pb.contains("openssl"),
+            "needed_names must add openssl\n{pb}"
+        );
+        let _ = std::fs::remove_dir_all(wd);
+        let _ = code;
+    }
+
+    #[test]
+    #[ignore = "needs rpmbuild"]
+    fn convert_rpm_archive_matches_payload() {
+        if std::process::Command::new("rpmbuild")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            panic!("rpmbuild missing; keep #[ignore] on this test");
+        }
+        assert!(has_makepkg());
+        let _l = crate::hooks::set_lookup(none_lookup());
+        let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let dir = std::env::temp_dir().join(format!("packager-cvrpm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rpm = dir.join("hello-1.0-1.x86_64.rpm");
+        crate::testpkg::write_rpm(
+            &rpm,
+            &crate::testpkg::RpmSpec {
+                name: "hello".into(),
+                version: "1.0".into(),
+                release: "1".into(),
+                arch: "x86_64".into(),
+                requires: "glibc".into(),
+                files: vec![("/usr/bin/hello".into(), b"hi\n".to_vec())],
+                post: Some("ldconfig\n".into()),
+            },
+        )
+        .unwrap();
+        let wd = dir.join("wd");
+        let code = run([
+            "convert".into(),
+            "-y".into(),
+            rpm.to_string_lossy().into(),
+            "--workdir".into(),
+            wd.to_string_lossy().into(),
+        ]);
+        assert_eq!(code, 0);
+        let pkg = std::fs::read_dir(&wd)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".pkg.tar")
+            })
+            .expect("archive");
+        let listing = String::from_utf8(
+            std::process::Command::new("bsdtar")
+                .args(["-tf", pkg.to_str().unwrap()])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let payload = wd.join("payload");
+        let mut payload_files = Vec::new();
+        collect_rel_files(&payload, &payload, &mut payload_files);
+        for f in &payload_files {
+            assert!(listing.contains(f), "archive missing {f}\n{listing}");
+        }
+        assert!(listing.contains("usr/bin/hello"), "{listing}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn collect_rel_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rel_files(root, &path, out);
+            } else {
+                out.push(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
     }
 }
