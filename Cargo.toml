@@ -16,3 +16,17 @@ flate2 = "1"
 [features]
 default = []
 system = []
+
+# Smaller CLI: fat LTO, one CGU, stripped. panic=abort is fine — tests use unwind.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# `cargo build --profile release-with-debug` when a shipped binary needs backtraces.
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false
+panic = "unwind"

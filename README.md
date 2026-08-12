@@ -6,46 +6,6 @@ It is a **temporary bridge** until extra or an AUR maintainer ships a native pac
 
 Default path: preview → PKGBUILD → `makepkg` → `pacman -U`. Use `convert` to stop before install, or `scaffold` to stop after the PKGBUILD.
 
-## How it works
-
-```mermaid
-flowchart TD
-    A["Local .deb or .rpm"] --> B["Read metadata and file list"]
-    B --> C["Look up extra and AUR"]
-    C --> D["Print preview"]
-    D --> E{"Blocked?"}
-    E -->|"native match, lookup failed, or file conflict"| F["Hard stop"]
-    E -->|"ok, or --force"| G{"Confirm?"}
-    G -->|no| F
-    G -->|"yes, or -y"| H["Extract payload with bsdtar"]
-    H --> I{"Command"}
-    I -->|scaffold| J["Write PKGBUILD"]
-    J --> K["Done"]
-    I -->|convert / install| L["Map depends: declared + readelf NEEDED + pkgfile"]
-    L --> M["Write PKGBUILD"]
-    M --> N["makepkg without -s"]
-    N --> O{"Command"}
-    O -->|convert| P["Done: .pkg.tar.zst"]
-    O -->|install| Q["pacman -U"]
-    Q --> R["Record state JSON"]
-```
-
-Vendor `postinst` / `%post` scripts are never run during convert. They stay in `scripts.orig/`; only `--allow-scripts` copies them into a pacman `.install` so **pacman** can run them on `-U`.
-
-After a successful install, `status` checks whether extra or the AUR now has a native package, and `forget` drops tracking (optionally `pacman -R`):
-
-```mermaid
-flowchart LR
-    R["Tracked package"] --> S["packager status"]
-    S --> T{"Native extra or AUR?"}
-    T -->|yes| U["Install native, then forget"]
-    T -->|no| V["Keep the converted package"]
-    R --> W["packager forget"]
-    W --> X{"Also pacman -R?"}
-    X -->|no| Y["Drop tracking only"]
-    X -->|yes| Z["Uninstall, then drop tracking"]
-```
-
 ## Runtime tools
 
 These must be on `PATH`:
@@ -63,12 +23,13 @@ AUR lookups use the AUR RPC over the network; extra/multilib use the local pacma
 ## Build
 
 ```bash
-cargo build --release
-# or
-make build
+make build      # cargo build --release
+make release    # locked release binary (same profile as GitHub tag artifacts)
 ```
 
 Binary: `target/release/packager` (or `target/debug/packager` after `cargo build`).
+
+Release profile (`Cargo.toml`): fat LTO, one codegen unit, stripped, `panic = abort`. Push a `v*` tag to publish a GitHub Release.
 
 ## Usage
 
@@ -118,3 +79,43 @@ sudo -E make test-system     # opt-in @system tests (feature "system"); needs ro
 `make test-system` must be run as **`sudo -E make test-system`**. Root is required (`pacman -U` / `-R`), and **`SUDO_USER` must be set** so `makepkg` can drop privileges and state is written under the original user. A plain `sudo make test-system` (without `-E`) can drop `SUDO_USER` depending on sudoers. As a normal user those tests **panic** (fail) on purpose so a non-root CI job cannot silently skip them.
 
 Human smoke notes for real vendor packages live in [`docs/superpowers/plans/v1-system-smoke.md`](docs/superpowers/plans/v1-system-smoke.md). Do not commit vendor `.deb` / `.rpm` blobs.
+
+## How it works
+
+```mermaid
+flowchart TD
+    A["Local .deb or .rpm"] --> B["Read metadata and file list"]
+    B --> C["Look up extra and AUR"]
+    C --> D["Print preview"]
+    D --> E{"Blocked?"}
+    E -->|"native match, lookup failed, or file conflict"| F["Hard stop"]
+    E -->|"ok, or --force"| G{"Confirm?"}
+    G -->|no| F
+    G -->|"yes, or -y"| H["Extract payload with bsdtar"]
+    H --> I{"Command"}
+    I -->|scaffold| J["Write PKGBUILD"]
+    J --> K["Done"]
+    I -->|convert / install| L["Map depends: declared + readelf NEEDED + pkgfile"]
+    L --> M["Write PKGBUILD"]
+    M --> N["makepkg without -s"]
+    N --> O{"Command"}
+    O -->|convert| P["Done: .pkg.tar.zst"]
+    O -->|install| Q["pacman -U"]
+    Q --> R["Record state JSON"]
+```
+
+Vendor `postinst` / `%post` scripts are never run during convert. They stay in `scripts.orig/`; only `--allow-scripts` copies them into a pacman `.install` so **pacman** can run them on `-U`.
+
+After a successful install, `status` checks whether extra or the AUR now has a native package, and `forget` drops tracking (optionally `pacman -R`):
+
+```mermaid
+flowchart LR
+    R["Tracked package"] --> S["packager status"]
+    S --> T{"Native extra or AUR?"}
+    T -->|yes| U["Install native, then forget"]
+    T -->|no| V["Keep the converted package"]
+    R --> W["packager forget"]
+    W --> X{"Also pacman -R?"}
+    X -->|no| Y["Drop tracking only"]
+    X -->|yes| Z["Uninstall, then drop tracking"]
+```

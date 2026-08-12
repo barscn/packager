@@ -92,6 +92,7 @@ External tools on `PATH`: `bsdtar`, `readelf`, `pkgfile`, `makepkg`/`fakeroot`, 
 
 ```bash
 make build                         # cargo build --release
+make release                       # cargo build --release --locked (GitHub tag artifacts)
 make test                          # RUST_TEST_THREADS=1 cargo test --lib
 sudo -E make test-system           # root + SUDO_USER required
 cargo fmt --all -- --check
