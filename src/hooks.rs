@@ -1,14 +1,23 @@
 //! Process-global test hooks with drop guards that restore on unwind.
 
+use crate::depmap;
+use crate::elfinfo;
 use crate::error::Result;
 use crate::ident;
+use crate::lookup;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
 
 pub type OwnedByFn = fn(&Path) -> Result<Option<String>>;
+pub type ConfirmFn = fn(&str) -> bool;
+pub type ScanFn = fn(&Path) -> Result<Vec<elfinfo::Info>>;
 
 static OWNED_BY: Mutex<Option<OwnedByFn>> = Mutex::new(None);
+pub static LOOKUP: Mutex<Option<lookup::Client>> = Mutex::new(None);
+pub static MAP_RESOLVER: Mutex<Option<Box<dyn depmap::Resolver + Send + Sync>>> = Mutex::new(None);
+pub static CONFIRM: Mutex<Option<ConfirmFn>> = Mutex::new(None);
+static SCAN: Mutex<Option<ScanFn>> = Mutex::new(None);
 
 /// Restores the previous hook value on drop, including during unwind.
 #[must_use = "the hook is restored when this guard is dropped"]
@@ -41,10 +50,83 @@ pub fn set_owned_by(f: OwnedByFn) -> Guard<OwnedByFn> {
     set(&OWNED_BY, f)
 }
 
+pub fn set_lookup(c: lookup::Client) -> Guard<lookup::Client> {
+    set(&LOOKUP, c)
+}
+
+pub fn set_resolver(
+    r: Box<dyn depmap::Resolver + Send + Sync>,
+) -> Guard<Box<dyn depmap::Resolver + Send + Sync>> {
+    set(&MAP_RESOLVER, r)
+}
+
+pub fn set_confirm(f: ConfirmFn) -> Guard<ConfirmFn> {
+    set(&CONFIRM, f)
+}
+
+pub fn set_scan(f: ScanFn) -> Guard<ScanFn> {
+    set(&SCAN, f)
+}
+
 pub(crate) fn owned_by_hook() -> Option<OwnedByFn> {
     match OWNED_BY.lock() {
         Ok(g) => *g,
         Err(p) => *p.into_inner(),
+    }
+}
+
+fn lock_slot<T>(slot: &Mutex<Option<T>>) -> std::sync::MutexGuard<'_, Option<T>> {
+    match slot.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    }
+}
+
+/// Hooked lookup client, or extra=`pacman_si` + AUR=`live_aur`.
+pub fn lookup_client() -> lookup::Client {
+    match lock_slot(&LOOKUP).as_ref() {
+        Some(c) => lookup::Client {
+            extra: c.extra,
+            aur: c.aur,
+        },
+        None => lookup::Client {
+            extra: lookup::pacman_si,
+            aur: lookup::live_aur,
+        },
+    }
+}
+
+/// Run `f` with the hooked resolver, or [`depmap::PkgfileResolver`].
+pub fn with_resolver<R>(f: impl FnOnce(&dyn depmap::Resolver) -> R) -> R {
+    match lock_slot(&MAP_RESOLVER).as_deref() {
+        Some(r) => f(r),
+        None => f(&depmap::PkgfileResolver),
+    }
+}
+
+/// Hooked confirm, or stdin: empty / `y` / `yes` proceeds.
+pub fn confirm(prompt: &str) -> bool {
+    if let Some(f) = *lock_slot(&CONFIRM) {
+        return f(prompt);
+    }
+    use std::io::{self, Write};
+    eprint!("{prompt}");
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    match io::stdin().read_line(&mut line) {
+        Ok(_) => {
+            let t = line.trim();
+            t.is_empty() || t.eq_ignore_ascii_case("y") || t.eq_ignore_ascii_case("yes")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Hooked ELF scan, or [`elfinfo::scan`].
+pub fn scan(root: &Path) -> Result<Vec<elfinfo::Info>> {
+    match *lock_slot(&SCAN) {
+        Some(f) => f(root),
+        None => elfinfo::scan(root),
     }
 }
 
