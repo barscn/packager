@@ -1,3 +1,4 @@
+pub mod depmap;
 pub mod elfinfo;
 pub mod error;
 pub mod ident;
