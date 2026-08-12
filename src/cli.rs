@@ -9,6 +9,7 @@ use crate::lookup;
 use crate::pkgbuild;
 use crate::preview;
 use crate::source;
+use crate::status;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -105,10 +106,8 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> i32 {
             match cfg.cmd.as_str() {
                 "scaffold" => pipeline(&cfg, false),
                 "convert" | "install" => pipeline(&cfg, true),
-                "status" | "forget" => {
-                    eprintln!("not implemented");
-                    2
-                }
+                "status" => cmd_status(),
+                "forget" => cmd_forget(&cfg),
                 _ => {
                     eprintln!("not implemented");
                     2
@@ -121,6 +120,42 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> i32 {
 fn fail(e: impl std::fmt::Display) -> i32 {
     eprintln!("{e}");
     1
+}
+
+fn cmd_status() -> i32 {
+    let recs = match crate::state::list() {
+        Ok(r) => r,
+        Err(e) => return fail(e),
+    };
+    print!(
+        "{}",
+        status::report(
+            &recs,
+            &|name| hooks::query(name),
+            &|names| hooks::lookup_client().find(names),
+        )
+    );
+    0
+}
+
+fn cmd_forget(cfg: &Config) -> i32 {
+    let pkg = match &cfg.pkg {
+        Some(p) => p.as_str(),
+        None => return fail("usage: packager forget <pkg>"),
+    };
+    if let Err(e) = crate::state::read(pkg) {
+        return fail(e);
+    }
+    // Always ask; --yes does not auto-yes. noconfirm only if the user said yes and --yes.
+    if hooks::forget_remove(&format!("Also run pacman -R {pkg}? [y/N] ")) {
+        if let Err(e) = hooks::remove(pkg, cfg.yes) {
+            return fail(e);
+        }
+    }
+    if let Err(e) = crate::state::delete(pkg) {
+        return fail(e);
+    }
+    0
 }
 
 fn default_workdir(pkgname: &str, pkgver: &str) -> PathBuf {

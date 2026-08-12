@@ -13,6 +13,9 @@ pub type OwnedByFn = fn(&Path) -> Result<Option<String>>;
 pub type ConfirmFn = fn(&str) -> bool;
 pub type ScanFn = fn(&Path) -> Result<Vec<elfinfo::Info>>;
 pub type UpgradeFn = fn(&Path, bool) -> Result<()>;
+pub type RemoveFn = fn(&str, bool) -> Result<()>;
+pub type QueryFn = fn(&str) -> Result<Option<String>>;
+pub type ForgetRemoveFn = fn(&str) -> bool;
 
 static OWNED_BY: Mutex<Option<OwnedByFn>> = Mutex::new(None);
 pub static LOOKUP: Mutex<Option<lookup::Client>> = Mutex::new(None);
@@ -20,6 +23,9 @@ pub static MAP_RESOLVER: Mutex<Option<Box<dyn depmap::Resolver + Send + Sync>>> 
 pub static CONFIRM: Mutex<Option<ConfirmFn>> = Mutex::new(None);
 static SCAN: Mutex<Option<ScanFn>> = Mutex::new(None);
 static UPGRADE: Mutex<Option<UpgradeFn>> = Mutex::new(None);
+static REMOVE: Mutex<Option<RemoveFn>> = Mutex::new(None);
+static QUERY: Mutex<Option<QueryFn>> = Mutex::new(None);
+static FORGET_REMOVE: Mutex<Option<ForgetRemoveFn>> = Mutex::new(None);
 
 /// Restores the previous hook value on drop, including during unwind.
 #[must_use = "the hook is restored when this guard is dropped"]
@@ -72,6 +78,18 @@ pub fn set_scan(f: ScanFn) -> Guard<ScanFn> {
 
 pub fn set_upgrade(f: UpgradeFn) -> Guard<UpgradeFn> {
     set(&UPGRADE, f)
+}
+
+pub fn set_remove(f: RemoveFn) -> Guard<RemoveFn> {
+    set(&REMOVE, f)
+}
+
+pub fn set_query(f: QueryFn) -> Guard<QueryFn> {
+    set(&QUERY, f)
+}
+
+pub fn set_forget_remove(f: ForgetRemoveFn) -> Guard<ForgetRemoveFn> {
+    set(&FORGET_REMOVE, f)
 }
 
 pub(crate) fn owned_by_hook() -> Option<OwnedByFn> {
@@ -141,6 +159,40 @@ pub fn upgrade(pkg_path: &Path, noconfirm: bool) -> Result<()> {
     match *lock_slot(&UPGRADE) {
         Some(f) => f(pkg_path, noconfirm),
         None => crate::pm::upgrade(pkg_path, noconfirm),
+    }
+}
+
+/// Hooked `pacman -R`, or [`crate::pm::remove`].
+pub fn remove(pkg: &str, noconfirm: bool) -> Result<()> {
+    match *lock_slot(&REMOVE) {
+        Some(f) => f(pkg, noconfirm),
+        None => crate::pm::remove(pkg, noconfirm),
+    }
+}
+
+/// Hooked `pacman -Q`, or [`crate::pm::query`].
+pub fn query(pkg: &str) -> Result<Option<String>> {
+    match *lock_slot(&QUERY) {
+        Some(f) => f(pkg),
+        None => crate::pm::query(pkg),
+    }
+}
+
+/// Ask whether `forget` should also `pacman -R`. Default is no; `--yes` does not skip this.
+pub fn forget_remove(prompt: &str) -> bool {
+    if let Some(f) = *lock_slot(&FORGET_REMOVE) {
+        return f(prompt);
+    }
+    use std::io::{self, Write};
+    eprint!("{prompt}");
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    match io::stdin().read_line(&mut line) {
+        Ok(_) => {
+            let t = line.trim();
+            t.eq_ignore_ascii_case("y") || t.eq_ignore_ascii_case("yes")
+        }
+        Err(_) => false,
     }
 }
 

@@ -11,4 +11,5 @@ pub mod pm;
 pub mod preview;
 pub mod source;
 pub mod state;
+pub mod status;
 pub mod testpkg;
