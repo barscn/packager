@@ -1,10 +1,13 @@
+pub mod build;
 pub mod cli;
 pub mod depmap;
 pub mod elfinfo;
 pub mod error;
+pub mod hooks;
 pub mod ident;
 pub mod lookup;
 pub mod pkgbuild;
+pub mod pm;
 pub mod preview;
 pub mod source;
 pub mod state;
