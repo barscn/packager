@@ -71,8 +71,12 @@ fn list_from_bsdtar(path: &Path) -> Result<Vec<String>> {
     Ok(normalize_listing(&out.stdout))
 }
 
-/// Locate the `data.tar*` ar member of a `.deb`.
 fn data_member(path: &Path) -> Result<String> {
+    deb_ar_member(path, "data.tar")
+}
+
+/// Locate an ar member named `stem` or `stem.*` (e.g. `control.tar`, `data.tar`).
+pub(crate) fn deb_ar_member(path: &Path, stem: &str) -> Result<String> {
     let out = Command::new("bsdtar")
         .arg("-tf")
         .arg(path)
@@ -85,11 +89,36 @@ fn data_member(path: &Path) -> Result<String> {
         )));
     }
     let text = String::from_utf8_lossy(&out.stdout);
+    let prefix = format!("{stem}.");
     text.lines()
         .map(|l| l.trim().trim_end_matches('/'))
-        .find(|n| *n == "data.tar" || n.starts_with("data.tar."))
+        .find(|n| *n == stem || n.starts_with(&prefix))
         .map(|s| s.to_string())
-        .ok_or_else(|| Error::msg("deb missing data.tar*"))
+        .ok_or_else(|| Error::msg(format!("deb missing {stem}*")))
+}
+
+/// Bytes of one ar member (`bsdtar -O -xf`, any compression).
+pub(crate) fn deb_ar_member_bytes(path: &Path, member: &str) -> Result<Vec<u8>> {
+    bsdtar_stdout(["-O", "-xf"], &[path.as_os_str(), member.as_ref()])
+}
+
+/// Normalized paths inside a tar stream (gz / xz / zst / plain).
+pub(crate) fn tar_listing(tar: &[u8]) -> Result<Vec<String>> {
+    Ok(normalize_listing(&bsdtar_stdin_stdout(&["-tf", "-"], tar)?))
+}
+
+/// File contents from a tar stream. `name` is the listing path (`control`, not `./control`).
+pub(crate) fn tar_file(tar: &[u8], name: &str) -> Result<Option<Vec<u8>>> {
+    let listing = tar_listing(tar)?;
+    if !listing.iter().any(|n| n == name) {
+        return Ok(None);
+    }
+    for candidate in [name, &format!("./{name}")] {
+        if let Ok(bytes) = bsdtar_stdin_stdout(&["-O", "-xf", "-", "--", candidate], tar) {
+            return Ok(Some(bytes));
+        }
+    }
+    Err(Error::msg(format!("bsdtar could not extract {name}")))
 }
 
 fn bsdtar_stdout(
