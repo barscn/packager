@@ -1,11 +1,12 @@
-//! Tiny package fixtures for tests (`.deb` now; `.rpm` later).
+//! Tiny package fixtures for tests (`.deb` / `.rpm`).
 
 use crate::error::{Error, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use tar::{Builder, EntryType, Header};
 
 pub struct DebSpec {
@@ -15,6 +16,154 @@ pub struct DebSpec {
     pub depends: String,
     pub files: Vec<(String, Vec<u8>)>,
     pub postinst: Option<String>,
+}
+
+pub struct RpmSpec {
+    pub name: String,
+    pub version: String,
+    pub release: String,
+    pub arch: String,
+    pub requires: String,
+    pub files: Vec<(String, Vec<u8>)>,
+    pub post: Option<String>,
+}
+
+/// Write a minimal `.rpm` via `rpmbuild -bb` (temp `_topdir` tree).
+pub fn write_rpm(path: &Path, spec: &RpmSpec) -> Result<()> {
+    let top = std::env::temp_dir().join(format!(
+        "packager-rpmbuild-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    for sub in ["BUILD", "RPMS", "SOURCES", "SPECS", "BUILDROOT", "SRPMS"] {
+        std::fs::create_dir_all(top.join(sub))?;
+    }
+
+    // Stage payload files under SOURCES with stable basenames; map back in %install.
+    let mut install_lines = Vec::new();
+    let mut files_lines = Vec::new();
+    for (i, (dest, data)) in spec.files.iter().enumerate() {
+        let dest = dest.trim_start_matches("./");
+        let dest = if dest.starts_with('/') {
+            dest.to_string()
+        } else {
+            format!("/{dest}")
+        };
+        let src_name = format!("payload{i}");
+        std::fs::write(top.join("SOURCES").join(&src_name), data)?;
+        let mode = if data.starts_with(b"#!") { "755" } else { "644" };
+        let parent = Path::new(&dest)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/".into());
+        install_lines.push(format!("mkdir -p \"%{{buildroot}}{parent}\""));
+        install_lines.push(format!(
+            "install -m {mode} \"%{{_sourcedir}}/{src_name}\" \"%{{buildroot}}{dest}\""
+        ));
+        files_lines.push(dest);
+    }
+
+    let requires_line = if spec.requires.trim().is_empty() {
+        String::new()
+    } else {
+        format!("Requires: {}\n", spec.requires.trim())
+    };
+
+    let post_section = match &spec.post {
+        Some(body) if !body.is_empty() => format!("\n%post\n{}\n", body.trim_end()),
+        _ => String::new(),
+    };
+
+    let spec_body = format!(
+        "Name: {name}\n\
+         Version: {version}\n\
+         Release: {release}\n\
+         Summary: test fixture\n\
+         License: MIT\n\
+         BuildArch: {arch}\n\
+         {requires}\
+         \n\
+         %description\n\
+         test fixture\n\
+         \n\
+         %install\n\
+         rm -rf \"%{{buildroot}}\"\n\
+         {install}\n\
+         \n\
+         %files\n\
+         {files}\n\
+         {post}\n",
+        name = spec.name,
+        version = spec.version,
+        release = spec.release,
+        arch = spec.arch,
+        requires = requires_line,
+        install = install_lines.join("\n"),
+        files = files_lines.join("\n"),
+        post = post_section,
+    );
+
+    let spec_path = top.join("SPECS").join(format!("{}.spec", spec.name));
+    std::fs::write(&spec_path, spec_body)?;
+
+    let top_str = top.to_string_lossy();
+    let out = Command::new("rpmbuild")
+        .args([
+            "-bb",
+            "--define",
+            &format!("_topdir {top_str}"),
+            "--define",
+            "debug_package %{nil}",
+            "--define",
+            "_build_id_links none",
+        ])
+        .arg(&spec_path)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::msg("rpmbuild not found; install rpm-tools")
+            } else {
+                Error::msg(format!("rpmbuild: {e}"))
+            }
+        })?;
+    if !out.status.success() {
+        let _ = std::fs::remove_dir_all(&top);
+        return Err(Error::msg(format!(
+            "rpmbuild failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+
+    let produced = find_rpm(&top.join("RPMS"))?
+        .ok_or_else(|| Error::msg("rpmbuild produced no .rpm"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(&produced, path)?;
+    let _ = std::fs::remove_dir_all(&top);
+    Ok(())
+}
+
+fn find_rpm(dir: &Path) -> Result<Option<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        for entry in std::fs::read_dir(&cur)? {
+            let entry = entry?;
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|e| e.to_str()) == Some("rpm") {
+                return Ok(Some(p));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Write a minimal `.deb` (GNU `ar` of `debian-binary`, `control.tar.gz`, `data.tar.gz`).

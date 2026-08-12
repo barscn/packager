@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 
 mod deb;
 mod extract;
+mod rpm;
 
 pub use extract::{extract, list_payload};
+pub use rpm::RPM_BIN;
 
 #[derive(Clone, Debug)]
 pub struct Script {
@@ -51,7 +53,7 @@ pub fn detect(path: &Path) -> Result<ident::Format> {
 pub fn parse_meta(path: &Path) -> Result<Package> {
     match detect(path)? {
         ident::Format::Deb => deb::parse_meta(path),
-        ident::Format::Rpm => Err(Error::msg("rpm parse not implemented")),
+        ident::Format::Rpm => rpm::parse_meta(path),
     }
 }
 
@@ -108,6 +110,68 @@ mod tests {
         assert!(pkg.file_list.iter().any(|f| f == "usr/bin/hello"), "{:?}", pkg.file_list);
         let listed = list_payload(&deb).unwrap();
         assert!(listed.iter().any(|f| f == "usr/bin/hello"), "{listed:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Restores [`RPM_BIN`] even if the test panics mid-flight.
+    struct RpmBinGuard(String);
+    impl Drop for RpmBinGuard {
+        fn drop(&mut self) {
+            let mut bin = RPM_BIN.lock().unwrap_or_else(|e| e.into_inner());
+            *bin = std::mem::take(&mut self.0);
+        }
+    }
+
+    #[test]
+    fn parse_rpm_requires_tools() {
+        let _guard = {
+            let mut bin = RPM_BIN.lock().unwrap();
+            let old = bin.clone();
+            *bin = "rpm-definitely-not-installed".into();
+            RpmBinGuard(old)
+        };
+        let err = parse_meta(Path::new("x.rpm")).unwrap_err();
+        assert!(err.to_string().contains("install rpm-tools"), "{err}");
+    }
+
+    #[test]
+    #[ignore = "needs rpmbuild"]
+    fn parse_rpm_meta() {
+        if std::process::Command::new("rpmbuild")
+            .arg("--version")
+            .output()
+            .is_err()
+            || std::process::Command::new("rpm")
+                .arg("--version")
+                .output()
+                .is_err()
+        {
+            // Marked #[ignore] on the test function; do not `return` here if someone
+            // removes the attribute — fail instead of faking success.
+            panic!("rpmbuild/rpm missing; keep #[ignore] on this test");
+        }
+        let dir = std::env::temp_dir().join(format!("packager-rpm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hello-1.0-1.x86_64.rpm");
+        crate::testpkg::write_rpm(
+            &path,
+            &crate::testpkg::RpmSpec {
+                name: "hello".into(),
+                version: "1.0".into(),
+                release: "1".into(),
+                arch: "x86_64".into(),
+                requires: "glibc".into(),
+                files: vec![("/usr/bin/hello".into(), b"hi\n".to_vec())],
+                post: Some("ldconfig\n".into()),
+            },
+        )
+        .unwrap();
+        let pkg = parse_meta(&path).unwrap();
+        assert!(matches!(pkg.format, ident::Format::Rpm));
+        assert_eq!(pkg.raw_name, "hello");
+        assert_eq!(pkg.raw_version, "1.0");
+        assert_eq!(pkg.raw_arch, "x86_64");
+        assert!(pkg.depends.iter().any(|d| d == "glibc"), "{:?}", pkg.depends);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
