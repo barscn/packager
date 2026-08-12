@@ -72,7 +72,7 @@ pub fn write(pkg: &source::Package, deps: &depmap::Buckets, opt: &Options) -> Re
     if write_install {
         pb.push_str(&format!("install={pkgname}.install\n"));
     }
-    pb.push_str(&format!("packager=\"{}\"\n", ident::PACKAGER_FIELD));
+    pb.push_str(&format!("export PACKAGER=\"{}\"\n", ident::PACKAGER_FIELD));
     pb.push_str("options=(!strip !docs !libtool !staticlibs emptydirs)\n");
     pb.push('\n');
     pb.push_str("package() {\n");
@@ -193,7 +193,7 @@ mod tests {
             "pkgrel=1",
             "arch=('x86_64')",
             "depends=(glibc gtk3)",
-            r#"packager="packager <packager@local>""#,
+            r#"export PACKAGER="packager <packager@local>""#,
         ] {
             assert!(s.contains(want), "missing {want} in\n{s}");
         }
