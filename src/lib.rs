@@ -6,4 +6,5 @@ pub mod lookup;
 pub mod pkgbuild;
 pub mod preview;
 pub mod source;
+pub mod state;
 pub mod testpkg;
