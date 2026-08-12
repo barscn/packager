@@ -39,10 +39,14 @@ pub fn report(
             Ok(hits) if hits.is_empty() => out.push_str("  no native package\n"),
             Ok(hits) => {
                 let h = &hits[0];
-                out.push_str(&format!(
-                    "  {} has {} {}  →  replace: sudo pacman -S {}\n",
-                    h.repo, h.name, h.version, h.name
-                ));
+                if h.repo == "aur" {
+                    out.push_str(&format!("  {} is in the AUR\n", h.name));
+                } else {
+                    out.push_str(&format!(
+                        "  {} has {} {}  →  replace: sudo pacman -S {}\n",
+                        h.repo, h.name, h.version, h.name
+                    ));
+                }
             }
         }
     }
@@ -83,6 +87,20 @@ mod tests {
             }])
         });
         assert!(out.contains("replace: sudo pacman -S zoom"), "{out}");
+    }
+
+    #[test]
+    fn report_native_aur() {
+        let recs = [empty_rec("acme-vpn", "1.4", "acme-vpn.rpm")];
+        let out = report(&recs, &|_| Ok(Some("1.4-1".into())), &|_| {
+            Ok(vec![lookup::Hit {
+                name: "acme-vpn".into(),
+                version: "1.5-1".into(),
+                repo: "aur".into(),
+            }])
+        });
+        assert!(out.contains("acme-vpn is in the AUR"), "{out}");
+        assert!(!out.contains("pacman -S"), "{out}");
     }
 
     #[test]
