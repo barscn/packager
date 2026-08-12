@@ -228,7 +228,7 @@ v1 does not: repair a broken previous run (use a new run or a fresh `--workdir`)
 
 ## 7. Components
 
-Language is not locked in this spec. The design is a CLI that shells out to the tools in §5.2. Implementation language is chosen in the implementation plan.
+Implementation language is **Rust** (edition 2021). The design is a CLI that shells out to the tools in §5.2.
 
 Logical units (each one purpose, testable without the others):
 
@@ -314,11 +314,11 @@ Path **detection** is required (§8.1).
 | `makepkg -s` | Do not use | We are not an AUR helper |
 | `forget` | Always ask about `pacman -R`; default no; keep JSON if remove fails | Tracking and uninstall are separate |
 | State location | Per-user JSON; `packager` field in PKGBUILD | Works with sudo via `SUDO_USER`; no v1 system daemon |
-| Implementation language | Deferred to the implementation plan | Design is subprocess + files; language does not change behavior |
+| Implementation language | Rust (edition 2021) | Single binary, no runtime; design is still subprocess + files |
 
 ## 10. Open questions
 
-None that block this spec. Implementation language and the final binary name are plan-time choices.
+None that block this spec. The binary name stays `packager` unless we rename later.
 
 ## 11. What v1 looks like when it is done
 
