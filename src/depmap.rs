@@ -183,8 +183,11 @@ mod tests {
     #[test]
     fn map_names_buckets() {
         let r = Fake(
-            [("some-aur-tool".into(), ("some-aur-tool".into(), "aur".into()))]
-                .into(),
+            [(
+                "some-aur-tool".into(),
+                ("some-aur-tool".into(), "aur".into()),
+            )]
+            .into(),
         );
         let raw = [
             "libc6 (>= 2.28)",

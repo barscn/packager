@@ -1,7 +1,7 @@
 //! Debian `.deb` metadata via `bsdtar` (`control.tar` gz / xz / zst / plain).
 
 use super::extract;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::ident;
 use crate::source::{Package, Script};
 use std::path::Path;

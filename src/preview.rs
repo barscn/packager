@@ -90,9 +90,8 @@ pub fn evaluate(in_: Input<'_>) -> Report {
             block_reason = "file conflict".into();
         }
     } else {
-        let warn = !in_.depends.unmapped.is_empty()
-            || !pkg.scripts.is_empty()
-            || !layout.is_empty();
+        let warn =
+            !in_.depends.unmapped.is_empty() || !pkg.scripts.is_empty() || !layout.is_empty();
         if warn {
             verdict = Verdict::ProceedWarnings;
         }
@@ -133,11 +132,7 @@ fn first_command_token(body: &str) -> Option<&str> {
 pub fn format_report(r: &Report) -> String {
     let mut out = String::new();
 
-    out.push_str(&format!(
-        "source: {}  ({})\n",
-        r.source,
-        r.format.as_str()
-    ));
+    out.push_str(&format!("source: {}  ({})\n", r.source, r.format.as_str()));
 
     let arch_s = r.arch.map(|a| a.as_str()).unwrap_or("unknown");
     out.push_str(&format!(

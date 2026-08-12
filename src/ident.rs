@@ -64,7 +64,10 @@ mod tests {
 
     #[test]
     fn name_lowercases_underscores() {
-        assert_eq!(normalize_name("Google_Chrome_Stable"), "google-chrome-stable");
+        assert_eq!(
+            normalize_name("Google_Chrome_Stable"),
+            "google-chrome-stable"
+        );
     }
 
     #[test]

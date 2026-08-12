@@ -64,8 +64,14 @@ mod tests {
 
     #[test]
     fn detect_suffix() {
-        assert!(matches!(detect(Path::new("foo.deb")).unwrap(), ident::Format::Deb));
-        assert!(matches!(detect(Path::new("foo.rpm")).unwrap(), ident::Format::Rpm));
+        assert!(matches!(
+            detect(Path::new("foo.deb")).unwrap(),
+            ident::Format::Deb
+        ));
+        assert!(matches!(
+            detect(Path::new("foo.rpm")).unwrap(),
+            ident::Format::Rpm
+        ));
         assert!(detect(Path::new("foo.tar")).is_err());
     }
 
@@ -74,12 +80,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("packager-debmeta-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("hello_1.0_amd64.deb");
-        write_deb(&path, &DebSpec {
-            name: "hello".into(), version: "1.0".into(), arch: "amd64".into(),
-            depends: "libc6, libgtk-3-0".into(),
-            files: vec![("./usr/bin/hello".into(), b"hi\n".to_vec())],
-            postinst: Some("#!/bin/sh\nupdate-desktop-database\n".into()),
-        }).unwrap();
+        write_deb(
+            &path,
+            &DebSpec {
+                name: "hello".into(),
+                version: "1.0".into(),
+                arch: "amd64".into(),
+                depends: "libc6, libgtk-3-0".into(),
+                files: vec![("./usr/bin/hello".into(), b"hi\n".to_vec())],
+                postinst: Some("#!/bin/sh\nupdate-desktop-database\n".into()),
+            },
+        )
+        .unwrap();
         let pkg = parse_meta(&path).unwrap();
         assert!(matches!(pkg.format, ident::Format::Deb));
         assert_eq!(pkg.raw_name, "hello");
@@ -97,17 +109,30 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("packager-extract-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let deb = dir.join("hello_1.0_amd64.deb");
-        crate::testpkg::write_deb(&deb, &crate::testpkg::DebSpec {
-            name: "hello".into(), version: "1.0".into(), arch: "amd64".into(),
-            depends: String::new(),
-            files: vec![("./usr/bin/hello".into(), b"hi\n".to_vec())],
-            postinst: None,
-        }).unwrap();
+        crate::testpkg::write_deb(
+            &deb,
+            &crate::testpkg::DebSpec {
+                name: "hello".into(),
+                version: "1.0".into(),
+                arch: "amd64".into(),
+                depends: String::new(),
+                files: vec![("./usr/bin/hello".into(), b"hi\n".to_vec())],
+                postinst: None,
+            },
+        )
+        .unwrap();
         let mut pkg = parse_meta(&deb).unwrap();
         let dest = dir.join("out");
         extract(&mut pkg, &dest).unwrap();
-        assert_eq!(std::fs::read_to_string(dest.join("usr/bin/hello")).unwrap(), "hi\n");
-        assert!(pkg.file_list.iter().any(|f| f == "usr/bin/hello"), "{:?}", pkg.file_list);
+        assert_eq!(
+            std::fs::read_to_string(dest.join("usr/bin/hello")).unwrap(),
+            "hi\n"
+        );
+        assert!(
+            pkg.file_list.iter().any(|f| f == "usr/bin/hello"),
+            "{:?}",
+            pkg.file_list
+        );
         let listed = list_payload(&deb).unwrap();
         assert!(listed.iter().any(|f| f == "usr/bin/hello"), "{listed:?}");
         let _ = std::fs::remove_dir_all(dir);
@@ -171,7 +196,11 @@ mod tests {
         assert_eq!(pkg.raw_name, "hello");
         assert_eq!(pkg.raw_version, "1.0");
         assert_eq!(pkg.raw_arch, "x86_64");
-        assert!(pkg.depends.iter().any(|d| d == "glibc"), "{:?}", pkg.depends);
+        assert!(
+            pkg.depends.iter().any(|d| d == "glibc"),
+            "{:?}",
+            pkg.depends
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

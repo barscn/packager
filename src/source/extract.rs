@@ -239,15 +239,18 @@ fn bsdtar_stdin_stdout(args: &[&str], stdin_data: &[u8]) -> Result<Vec<u8>> {
     std::fs::write(&tmp, stdin_data)?;
     let mapped: Vec<&str> = args
         .iter()
-        .map(|a| if *a == "-" { tmp.to_str().unwrap_or("-") } else { *a })
+        .map(|a| {
+            if *a == "-" {
+                tmp.to_str().unwrap_or("-")
+            } else {
+                *a
+            }
+        })
         .collect();
-    let out = Command::new("bsdtar")
-        .args(&mapped)
-        .output()
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            Error::msg(format!("bsdtar: {e}"))
-        })?;
+    let out = Command::new("bsdtar").args(&mapped).output().map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        Error::msg(format!("bsdtar: {e}"))
+    })?;
     let _ = std::fs::remove_file(&tmp);
     if !out.status.success() {
         return Err(Error::msg(format!(

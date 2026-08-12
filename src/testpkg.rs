@@ -54,7 +54,11 @@ pub fn write_rpm(path: &Path, spec: &RpmSpec) -> Result<()> {
         };
         let src_name = format!("payload{i}");
         std::fs::write(top.join("SOURCES").join(&src_name), data)?;
-        let mode = if data.starts_with(b"#!") { "755" } else { "644" };
+        let mode = if data.starts_with(b"#!") {
+            "755"
+        } else {
+            "644"
+        };
         let parent = Path::new(&dest)
             .parent()
             .map(|p| p.to_string_lossy().into_owned())
@@ -137,8 +141,8 @@ pub fn write_rpm(path: &Path, spec: &RpmSpec) -> Result<()> {
         )));
     }
 
-    let produced = find_rpm(&top.join("RPMS"))?
-        .ok_or_else(|| Error::msg("rpmbuild produced no .rpm"))?;
+    let produced =
+        find_rpm(&top.join("RPMS"))?.ok_or_else(|| Error::msg("rpmbuild produced no .rpm"))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -213,7 +217,11 @@ fn build_data_tar_gz(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
                 append_dir(&mut builder, &dir)?;
             }
         }
-        let mode = if data.starts_with(b"#!") { 0o755 } else { 0o644 };
+        let mode = if data.starts_with(b"#!") {
+            0o755
+        } else {
+            0o644
+        };
         append_regular(&mut builder, path, data, mode)?;
     }
     finish_gz_tar(builder)
@@ -337,8 +345,15 @@ mod tests {
             },
         )
         .unwrap();
-        let out = Command::new("ar").args(["t", path.to_str().unwrap()]).output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let out = Command::new("ar")
+            .args(["t", path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let listing = String::from_utf8_lossy(&out.stdout);
         for m in ["debian-binary", "control.tar.gz", "data.tar.gz"] {
             assert!(listing.contains(m), "{listing}");

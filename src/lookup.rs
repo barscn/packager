@@ -87,8 +87,8 @@ struct AurResult {
 
 /// Parse AUR RPC v5 multiinfo body → first hit or None when resultcount is 0.
 pub fn parse_aur(body: &[u8]) -> Result<Option<Hit>> {
-    let rpc: AurRpc = serde_json::from_slice(body)
-        .map_err(|e| Error::msg(format!("AUR JSON: {e}")))?;
+    let rpc: AurRpc =
+        serde_json::from_slice(body).map_err(|e| Error::msg(format!("AUR JSON: {e}")))?;
     if rpc.resultcount == 0 || rpc.results.is_empty() {
         return Ok(None);
     }
@@ -114,9 +114,7 @@ pub fn live_aur(name: &str) -> Result<Option<Hit>> {
 
 /// Query local sync DB via `pacman -Si`; parse Repository / Name / Version.
 pub fn pacman_si(name: &str) -> Result<Option<Hit>> {
-    let out = Command::new("pacman")
-        .args(["-Si", "--", name])
-        .output()?;
+    let out = Command::new("pacman").args(["-Si", "--", name]).output()?;
     if !out.status.success() {
         return Ok(None);
     }

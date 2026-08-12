@@ -114,11 +114,7 @@ fn parse_readelf(rel: &str, text: &str) -> Info {
 }
 
 /// Layout / ABI warnings. Never rewrites paths.
-pub fn layout_warnings(
-    file_list: &[String],
-    infos: &[Info],
-    host: ident::Arch,
-) -> Vec<String> {
+pub fn layout_warnings(file_list: &[String], infos: &[Info], host: ident::Arch) -> Vec<String> {
     let mut warnings = Vec::new();
 
     for path in file_list {
@@ -193,10 +189,7 @@ mod tests {
             eprintln!("skip scan_finds_elf: readelf missing");
             return;
         }
-        let dir = std::env::temp_dir().join(format!(
-            "packager-elfinfo-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("packager-elfinfo-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("usr/bin")).unwrap();
         // Copy a known host ELF into the tree
@@ -212,7 +205,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(
-            infos.iter().any(|i| i.path == "usr/bin/hello" && i.class == "ELF64"),
+            infos
+                .iter()
+                .any(|i| i.path == "usr/bin/hello" && i.class == "ELF64"),
             "infos={infos:?}"
         );
         assert!(
@@ -221,7 +216,9 @@ mod tests {
         );
         let hello = infos.iter().find(|i| i.path == "usr/bin/hello").unwrap();
         assert!(!hello.needed.is_empty(), "expected NEEDED: {hello:?}");
-        assert!(!hello.interpreter.is_empty(), "expected interpreter: {hello:?}");
+        assert!(
+            !hello.interpreter.is_empty(),
+            "expected interpreter: {hello:?}"
+        );
     }
-
 }
