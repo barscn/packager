@@ -49,7 +49,7 @@ fn system_install_then_forget_without_remove() {
     }
     let _l = packager::hooks::set_lookup(none_lookup());
     let data = std::env::temp_dir().join(format!("packager-sysd-{}", std::process::id()));
-    state::set_data_dir_for_test(Some(data.clone()));
+    let _g = state::set_data_dir_for_test(Some(data.clone()));
     let deb = fixture_deb();
     let wd = std::env::temp_dir().join(format!("packager-sysw-{}", std::process::id()));
     assert_eq!(
@@ -78,7 +78,6 @@ fn system_install_then_forget_without_remove() {
     let _ = Command::new("pacman")
         .args(["-R", "--noconfirm", "packager-systest"])
         .status();
-    state::set_data_dir_for_test(None);
 }
 
 #[test]
@@ -88,7 +87,7 @@ fn system_forget_with_remove() {
     }
     let _l = packager::hooks::set_lookup(none_lookup());
     let data = std::env::temp_dir().join(format!("packager-sysd2-{}", std::process::id()));
-    state::set_data_dir_for_test(Some(data.clone()));
+    let _g = state::set_data_dir_for_test(Some(data.clone()));
     let deb = fixture_deb();
     let wd = std::env::temp_dir().join(format!("packager-sysw2-{}", std::process::id()));
     assert_eq!(
@@ -109,7 +108,6 @@ fn system_forget_with_remove() {
         .status()
         .unwrap()
         .success());
-    state::set_data_dir_for_test(None);
 }
 
 #[test]

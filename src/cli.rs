@@ -129,11 +129,9 @@ fn cmd_status() -> i32 {
     };
     print!(
         "{}",
-        status::report(
-            &recs,
-            &|name| hooks::query(name),
-            &|names| hooks::lookup_client().find(names),
-        )
+        status::report(&recs, &|name| hooks::query(name), &|names| {
+            hooks::lookup_client().find(names)
+        },)
     );
     0
 }
@@ -246,9 +244,18 @@ fn pipeline(cfg: &Config, convert: bool) -> i32 {
         return fail(e);
     }
     if convert {
-        match union_needed(&pkg.depends, &payload) {
-            Ok(d) => depends = d,
+        let infos = match hooks::scan(&payload) {
+            Ok(i) => i,
             Err(e) => return fail(e),
+        };
+        depends = union_needed_from_scan(&pkg.depends, &infos);
+        let extra = crate::elfinfo::layout_warnings(&pkg.file_list, &infos, hooks::host_arch());
+        let new: Vec<_> = extra
+            .into_iter()
+            .filter(|w| !report.layout.iter().any(|old| old == w))
+            .collect();
+        if !new.is_empty() {
+            println!("layout: {}", new.join("; "));
         }
     }
     if let Err(e) = pkgbuild::write(
@@ -319,13 +326,12 @@ fn write_install_state(
 }
 
 /// `needed_names` ∪ declared depends → `map_names`, adding new Extra hits.
-fn union_needed(declared: &[String], payload: &Path) -> Result<depmap::Buckets> {
-    let infos = hooks::scan(payload)?;
+fn union_needed_from_scan(declared: &[String], infos: &[crate::elfinfo::Info]) -> depmap::Buckets {
     let sonames: Vec<String> = infos
         .iter()
         .flat_map(|i| i.needed.iter().cloned())
         .collect();
-    Ok(hooks::with_resolver(|r| {
+    hooks::with_resolver(|r| {
         let mut b = depmap::map_names(declared, r);
         for n in depmap::needed_names(&sonames, r) {
             if !b.extra.iter().any(|e| e == &n) {
@@ -333,7 +339,7 @@ fn union_needed(declared: &[String], payload: &Path) -> Result<depmap::Buckets> 
             }
         }
         b
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -404,6 +410,10 @@ mod tests {
         lookup::Client { extra: n, aur: n }
     }
 
+    fn no_owner(_: &Path) -> crate::error::Result<Option<String>> {
+        Ok(None)
+    }
+
     struct NoneRes;
     impl depmap::Resolver for NoneRes {
         fn which(&self, _: &str) -> Option<(String, String)> {
@@ -415,6 +425,7 @@ mod tests {
     fn scaffold_writes_pkgbuild_without_archive() {
         let _l = crate::hooks::set_lookup(none_lookup());
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let _c = crate::hooks::set_confirm(|_| panic!("confirm must not run with -y"));
         let wd = std::env::temp_dir().join(format!("packager-scaf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&wd);
@@ -453,6 +464,7 @@ mod tests {
         }
         let _l = crate::hooks::set_lookup(lookup::Client { extra: hit, aur: n });
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let wd = std::env::temp_dir().join(format!("packager-scafn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&wd);
         let code = run([
@@ -481,6 +493,7 @@ mod tests {
             aur: n,
         });
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let wd = std::env::temp_dir().join(format!("packager-scafl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&wd);
         let code = run([
@@ -511,6 +524,7 @@ mod tests {
         }
         let _l = crate::hooks::set_lookup(lookup::Client { extra, aur: n });
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let dir = std::env::temp_dir().join(format!("packager-alias-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let deb = dir.join("google-chrome-stable_1_amd64.deb");
@@ -556,6 +570,7 @@ mod tests {
         assert!(has_makepkg());
         let _l = crate::hooks::set_lookup(none_lookup());
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let wd = std::env::temp_dir().join(format!("packager-cv-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&wd);
         let code = run([
@@ -601,6 +616,7 @@ mod tests {
         assert!(has_makepkg());
         let _l = crate::hooks::set_lookup(none_lookup());
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let wd = std::env::temp_dir().join(format!("packager-cvs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&wd);
         let code = run([
@@ -649,6 +665,7 @@ mod tests {
         }
         let _l = crate::hooks::set_lookup(none_lookup());
         let _r = crate::hooks::set_resolver(Box::new(Res));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let _s = crate::hooks::set_scan(|_| {
             Ok(vec![crate::elfinfo::Info {
                 path: "usr/bin/hello".into(),
@@ -697,6 +714,7 @@ mod tests {
         assert!(has_makepkg());
         let _l = crate::hooks::set_lookup(none_lookup());
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let dir = std::env::temp_dir().join(format!("packager-cvrpm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -785,9 +803,10 @@ mod tests {
     fn install_writes_state() {
         let st = std::env::temp_dir().join(format!("packager-st-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&st);
-        crate::state::set_data_dir_for_test(Some(st.clone()));
+        let _g = crate::state::set_data_dir_for_test(Some(st.clone()));
         let _l = crate::hooks::set_lookup(none_lookup());
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         *INSTALL_SAW.lock().unwrap() = None;
         let _u = crate::hooks::set_upgrade(record_install_upgrade);
         let wd = std::env::temp_dir().join(format!("packager-inst-{}", std::process::id()));
@@ -813,7 +832,6 @@ mod tests {
             saw.as_ref().unwrap().1,
             "-y must pass noconfirm to pacman -U"
         );
-        crate::state::set_data_dir_for_test(None);
         let _ = std::fs::remove_dir_all(st);
         let _ = std::fs::remove_dir_all(wd);
     }
@@ -823,9 +841,10 @@ mod tests {
     fn install_upgrade_fail_no_state() {
         let st = std::env::temp_dir().join(format!("packager-stf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&st);
-        crate::state::set_data_dir_for_test(Some(st.clone()));
+        let _g = crate::state::set_data_dir_for_test(Some(st.clone()));
         let _l = crate::hooks::set_lookup(none_lookup());
         let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _o = crate::hooks::set_owned_by(no_owner);
         let _u = crate::hooks::set_upgrade(fail_install_upgrade);
         let wd = std::env::temp_dir().join(format!("packager-instf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&wd);
@@ -843,7 +862,6 @@ mod tests {
             .filter_map(|e| e.ok())
             .any(|e| e.file_name().to_string_lossy().contains(".pkg.tar"));
         assert!(kept, "archive must remain after upgrade failure");
-        crate::state::set_data_dir_for_test(None);
         let _ = std::fs::remove_dir_all(st);
         let _ = std::fs::remove_dir_all(wd);
     }

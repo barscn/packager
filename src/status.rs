@@ -33,6 +33,14 @@ pub fn report(
             ));
             continue;
         }
+        let installed_ver = installed.as_deref().unwrap();
+        if !same_converted_version(installed_ver, &rec.pkgver) {
+            out.push_str(&format!(
+                "  replaced ({installed_ver}) — packager forget {}\n",
+                rec.pkgname
+            ));
+            continue;
+        }
         let names = lookup::candidates(&rec.pkgname, &rec.pkgname);
         match find(&names) {
             Err(_) => out.push_str("  lookup failed\n"),
@@ -51,6 +59,26 @@ pub fn report(
         }
     }
     out
+}
+
+/// Recorded `pkgver` vs `pacman -Q` (`[epoch:]pkgver-pkgrel`).
+fn same_converted_version(installed: &str, recorded: &str) -> bool {
+    if installed == recorded {
+        return true;
+    }
+    let inst = strip_epoch(installed);
+    let rec = strip_epoch(recorded);
+    if inst == rec {
+        return true;
+    }
+    match inst.rsplit_once('-') {
+        Some((ver, rel)) if !rel.is_empty() && ver == rec => true,
+        _ => false,
+    }
+}
+
+fn strip_epoch(v: &str) -> &str {
+    v.split_once(':').map(|(_, rest)| rest).unwrap_or(v)
 }
 
 #[cfg(test)]
@@ -128,9 +156,31 @@ mod tests {
     }
 
     #[test]
+    fn report_same_name_native_replace_is_stale() {
+        let recs = [empty_rec("zoom", "6.2.0", "zoom_amd64.deb")];
+        let out = report(&recs, &|_| Ok(Some("6.2.3-1".into())), &|_| {
+            Ok(vec![lookup::Hit {
+                name: "zoom".into(),
+                version: "6.2.3-1".into(),
+                repo: "extra".into(),
+            }])
+        });
+        assert!(out.contains("forget"), "{out}");
+        assert!(out.contains("replaced (6.2.3-1)"), "{out}");
+        assert!(!out.contains("replace: sudo pacman -S"), "{out}");
+    }
+
+    #[test]
+    fn report_matching_pkgrel_is_not_stale() {
+        assert!(same_converted_version("6.2.0-1", "6.2.0"));
+        assert!(same_converted_version("1:6.2.0-1", "6.2.0"));
+        assert!(!same_converted_version("6.2.3-1", "6.2.0"));
+    }
+
+    #[test]
     fn forget_no_remove() {
         let dir = std::env::temp_dir().join(format!("packager-fg-{}", std::process::id()));
-        crate::state::set_data_dir_for_test(Some(dir.clone()));
+        let _g = crate::state::set_data_dir_for_test(Some(dir.clone()));
         crate::state::write(&empty_rec("hello", "1.0", "hello.deb")).unwrap();
         use std::sync::atomic::{AtomicBool, Ordering};
         static REMOVED: AtomicBool = AtomicBool::new(false);
@@ -143,14 +193,13 @@ mod tests {
         assert_eq!(run(["forget".into(), "hello".into()]), 0);
         assert!(!REMOVED.load(Ordering::SeqCst));
         assert!(crate::state::read("hello").is_err());
-        crate::state::set_data_dir_for_test(None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn forget_yes_flag_does_not_auto_remove() {
         let dir = std::env::temp_dir().join(format!("packager-fgy-{}", std::process::id()));
-        crate::state::set_data_dir_for_test(Some(dir.clone()));
+        let _g = crate::state::set_data_dir_for_test(Some(dir.clone()));
         crate::state::write(&empty_rec("hello", "1.0", "hello.deb")).unwrap();
         use std::sync::atomic::{AtomicUsize, Ordering};
         static ASKED: AtomicUsize = AtomicUsize::new(0);
@@ -171,14 +220,13 @@ mod tests {
             "-y must not skip the remove prompt"
         );
         assert_eq!(REMOVED.load(Ordering::SeqCst), 0);
-        crate::state::set_data_dir_for_test(None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn forget_remove_fail_keeps_json() {
         let dir = std::env::temp_dir().join(format!("packager-fgf-{}", std::process::id()));
-        crate::state::set_data_dir_for_test(Some(dir.clone()));
+        let _g = crate::state::set_data_dir_for_test(Some(dir.clone()));
         crate::state::write(&empty_rec("hello", "1.0", "hello.deb")).unwrap();
         fn rem(_: &str, _: bool) -> crate::error::Result<()> {
             Err(crate::error::Error::msg("busy"))
@@ -187,14 +235,13 @@ mod tests {
         let _f = crate::hooks::set_forget_remove(|_| true);
         assert_eq!(run(["forget".into(), "hello".into()]), 1);
         assert!(crate::state::read("hello").is_ok());
-        crate::state::set_data_dir_for_test(None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn forget_remove_ok() {
         let dir = std::env::temp_dir().join(format!("packager-fgo-{}", std::process::id()));
-        crate::state::set_data_dir_for_test(Some(dir.clone()));
+        let _g = crate::state::set_data_dir_for_test(Some(dir.clone()));
         crate::state::write(&empty_rec("hello", "1.0", "hello.deb")).unwrap();
         fn rem(_: &str, noconfirm: bool) -> crate::error::Result<()> {
             assert!(!noconfirm);
@@ -204,7 +251,6 @@ mod tests {
         let _f = crate::hooks::set_forget_remove(|_| true);
         assert_eq!(run(["forget".into(), "hello".into()]), 0);
         assert!(crate::state::read("hello").is_err());
-        crate::state::set_data_dir_for_test(None);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
