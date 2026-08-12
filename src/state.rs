@@ -23,9 +23,31 @@ pub struct Record {
     pub workdir: String,
 }
 
-/// Override data dir for unit tests. Pass `None` to clear.
-pub fn set_data_dir_for_test(dir: Option<PathBuf>) {
-    *TEST_DATA_DIR.lock().unwrap() = dir;
+/// Restores the previous data-dir override on drop, including during unwind.
+#[must_use = "the data dir override is restored when this guard is dropped"]
+pub struct DataDirGuard {
+    prev: Option<PathBuf>,
+}
+
+impl Drop for DataDirGuard {
+    fn drop(&mut self) {
+        let mut slot = match TEST_DATA_DIR.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        *slot = self.prev.take();
+    }
+}
+
+/// Override data dir for unit tests. Pass `None` to clear. Restored when the guard drops.
+pub fn set_data_dir_for_test(dir: Option<PathBuf>) -> DataDirGuard {
+    let mut slot = match TEST_DATA_DIR.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let prev = slot.clone();
+    *slot = dir;
+    DataDirGuard { prev }
 }
 
 pub fn data_dir() -> PathBuf {
@@ -88,8 +110,7 @@ pub fn list() -> Result<Vec<Record>> {
             continue;
         }
         let data = std::fs::read(&path)?;
-        let rec: Record =
-            serde_json::from_slice(&data).map_err(|e| Error::msg(e.to_string()))?;
+        let rec: Record = serde_json::from_slice(&data).map_err(|e| Error::msg(e.to_string()))?;
         out.push(rec);
     }
     out.sort_by(|a, b| a.pkgname.cmp(&b.pkgname));
@@ -175,7 +196,7 @@ mod tests {
     fn write_read_delete() {
         let dir = std::env::temp_dir().join(format!("packager-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        set_data_dir_for_test(Some(dir.clone()));
+        let _g = set_data_dir_for_test(Some(dir.clone()));
         let r = Record {
             pkgname: "hello".into(),
             pkgver: "1.0".into(),
@@ -195,13 +216,26 @@ mod tests {
         assert_eq!(list().unwrap().len(), 1);
         delete("hello").unwrap();
         assert!(read("hello").is_err());
-        set_data_dir_for_test(None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
+    fn data_dir_guard_restores_on_unwind() {
+        let dir = std::env::temp_dir().join(format!("packager-stateg-{}", std::process::id()));
+        let _outer = set_data_dir_for_test(Some(dir.clone()));
+        let panicked = std::panic::catch_unwind(|| {
+            let inner = std::env::temp_dir().join("packager-stateg-inner");
+            let _g = set_data_dir_for_test(Some(inner.clone()));
+            assert_eq!(data_dir(), inner);
+            panic!("boom");
+        });
+        assert!(panicked.is_err());
+        assert_eq!(data_dir(), dir);
+    }
+
+    #[test]
     fn data_dir_sudo_user() {
-        set_data_dir_for_test(None);
+        let _g = set_data_dir_for_test(None);
         let getent = std::process::Command::new("getent")
             .args(["passwd", "nobody"])
             .output()
@@ -224,7 +258,7 @@ mod tests {
 
     #[test]
     fn data_dir_no_sudo_uses_xdg() {
-        set_data_dir_for_test(None);
+        let _g = set_data_dir_for_test(None);
         let prev_sudo = std::env::var("SUDO_USER").ok();
         let prev_xdg = std::env::var("XDG_DATA_HOME").ok();
         std::env::remove_var("SUDO_USER");
@@ -240,7 +274,6 @@ mod tests {
             Some(v) => std::env::set_var("XDG_DATA_HOME", v),
             None => std::env::remove_var("XDG_DATA_HOME"),
         }
-        set_data_dir_for_test(None);
         assert_eq!(d, xdg.join("packager/installed"));
     }
 }
