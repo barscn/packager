@@ -104,8 +104,8 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> i32 {
             }
             match cfg.cmd.as_str() {
                 "scaffold" => pipeline(&cfg, false),
-                "convert" => pipeline(&cfg, true),
-                "install" | "status" | "forget" => {
+                "convert" | "install" => pipeline(&cfg, true),
+                "status" | "forget" => {
                     eprintln!("not implemented");
                     2
                 }
@@ -141,7 +141,8 @@ fn listed_dir(path: &str, all: &[String]) -> bool {
         .any(|other| other.trim_end_matches('/').starts_with(&prefix))
 }
 
-/// Preview, then extract + write PKGBUILD. Convert also scans NEEDED and runs makepkg.
+/// Preview, then extract + write PKGBUILD. Convert/install scan NEEDED and run makepkg.
+/// Install then calls `pacman -U` and writes state (no JSON if upgrade fails).
 fn pipeline(cfg: &Config, convert: bool) -> i32 {
     let usage = if convert {
         "usage: packager convert <file.deb|.rpm>"
@@ -227,11 +228,59 @@ fn pipeline(cfg: &Config, convert: bool) -> i32 {
         return fail(e);
     }
     if convert {
-        if let Err(e) = build::makepkg(&workdir) {
-            return fail(e);
+        let archive = match build::makepkg(&workdir) {
+            Ok(p) => p,
+            Err(e) => return fail(e),
+        };
+        if cfg.cmd == "install" {
+            if let Err(e) = hooks::upgrade(&archive, cfg.yes) {
+                return fail(e);
+            }
+            if let Err(e) = write_install_state(cfg, &pkg, &report, path, &workdir) {
+                return fail(e);
+            }
         }
     }
     0
+}
+
+fn now_rfc3339() -> String {
+    std::process::Command::new("date")
+        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            (!s.is_empty()).then_some(s)
+        })
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".into())
+}
+
+fn write_install_state(
+    cfg: &Config,
+    pkg: &source::Package,
+    report: &preview::Report,
+    source_path: &Path,
+    workdir: &Path,
+) -> Result<()> {
+    crate::state::write(&crate::state::Record {
+        pkgname: report.pkgname.clone(),
+        pkgver: report.pkgver.clone(),
+        arch: report
+            .arch
+            .map(|a| a.as_str().to_string())
+            .unwrap_or_default(),
+        source_name: source_path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        source_checksum: crate::state::source_sum(source_path)?,
+        format: pkg.format.as_str().into(),
+        installed_at: now_rfc3339(),
+        allow_scripts: cfg.allow_scripts,
+        forced: cfg.force,
+        workdir: workdir.to_string_lossy().into_owned(),
+    })
 }
 
 /// `needed_names` ∪ declared depends → `map_names`, adding new Extra hits.
@@ -683,5 +732,91 @@ mod tests {
                 );
             }
         }
+    }
+
+    static INSTALL_SAW: std::sync::Mutex<Option<(PathBuf, bool)>> = std::sync::Mutex::new(None);
+
+    fn record_install_upgrade(p: &Path, noconfirm: bool) -> crate::error::Result<()> {
+        *INSTALL_SAW.lock().unwrap() = Some((p.to_path_buf(), noconfirm));
+        Ok(())
+    }
+
+    fn fail_install_upgrade(_: &Path, _: bool) -> crate::error::Result<()> {
+        Err(crate::error::Error::msg("pacman failed"))
+    }
+
+    #[test]
+    #[ignore = "needs makepkg"]
+    fn install_writes_state() {
+        let st = std::env::temp_dir().join(format!("packager-st-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&st);
+        crate::state::set_data_dir_for_test(Some(st.clone()));
+        let _l = crate::hooks::set_lookup(none_lookup());
+        let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        *INSTALL_SAW.lock().unwrap() = None;
+        let _u = crate::hooks::set_upgrade(record_install_upgrade);
+        let wd = std::env::temp_dir().join(format!("packager-inst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wd);
+        let code = run([
+            "install".into(),
+            "-y".into(),
+            write_hello_deb().to_string_lossy().into(),
+            "--workdir".into(),
+            wd.to_string_lossy().into(),
+        ]);
+        assert_eq!(code, 0);
+        let rec = crate::state::read("hello").unwrap();
+        assert_eq!(rec.pkgname, "hello");
+        let saw = INSTALL_SAW.lock().unwrap();
+        assert!(saw
+            .as_ref()
+            .unwrap()
+            .0
+            .to_string_lossy()
+            .contains(".pkg.tar"));
+        assert!(
+            saw.as_ref().unwrap().1,
+            "-y must pass noconfirm to pacman -U"
+        );
+        crate::state::set_data_dir_for_test(None);
+        let _ = std::fs::remove_dir_all(st);
+        let _ = std::fs::remove_dir_all(wd);
+    }
+
+    #[test]
+    #[ignore = "needs makepkg"]
+    fn install_upgrade_fail_no_state() {
+        let st = std::env::temp_dir().join(format!("packager-stf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&st);
+        crate::state::set_data_dir_for_test(Some(st.clone()));
+        let _l = crate::hooks::set_lookup(none_lookup());
+        let _r = crate::hooks::set_resolver(Box::new(NoneRes));
+        let _u = crate::hooks::set_upgrade(fail_install_upgrade);
+        let wd = std::env::temp_dir().join(format!("packager-instf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wd);
+        let code = run([
+            "install".into(),
+            "-y".into(),
+            write_hello_deb().to_string_lossy().into(),
+            "--workdir".into(),
+            wd.to_string_lossy().into(),
+        ]);
+        assert_eq!(code, 1);
+        assert!(crate::state::read("hello").is_err());
+        let kept = std::fs::read_dir(&wd)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains(".pkg.tar"));
+        assert!(kept, "archive must remain after upgrade failure");
+        crate::state::set_data_dir_for_test(None);
+        let _ = std::fs::remove_dir_all(st);
+        let _ = std::fs::remove_dir_all(wd);
+    }
+
+    #[test]
+    fn install_is_wired() {
+        // missing file → usage, not "not implemented"
+        let code = run(["install".into()]);
+        assert_eq!(code, 2);
     }
 }

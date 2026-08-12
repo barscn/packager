@@ -12,12 +12,14 @@ use std::sync::Mutex;
 pub type OwnedByFn = fn(&Path) -> Result<Option<String>>;
 pub type ConfirmFn = fn(&str) -> bool;
 pub type ScanFn = fn(&Path) -> Result<Vec<elfinfo::Info>>;
+pub type UpgradeFn = fn(&Path, bool) -> Result<()>;
 
 static OWNED_BY: Mutex<Option<OwnedByFn>> = Mutex::new(None);
 pub static LOOKUP: Mutex<Option<lookup::Client>> = Mutex::new(None);
 pub static MAP_RESOLVER: Mutex<Option<Box<dyn depmap::Resolver + Send + Sync>>> = Mutex::new(None);
 pub static CONFIRM: Mutex<Option<ConfirmFn>> = Mutex::new(None);
 static SCAN: Mutex<Option<ScanFn>> = Mutex::new(None);
+static UPGRADE: Mutex<Option<UpgradeFn>> = Mutex::new(None);
 
 /// Restores the previous hook value on drop, including during unwind.
 #[must_use = "the hook is restored when this guard is dropped"]
@@ -66,6 +68,10 @@ pub fn set_confirm(f: ConfirmFn) -> Guard<ConfirmFn> {
 
 pub fn set_scan(f: ScanFn) -> Guard<ScanFn> {
     set(&SCAN, f)
+}
+
+pub fn set_upgrade(f: UpgradeFn) -> Guard<UpgradeFn> {
+    set(&UPGRADE, f)
 }
 
 pub(crate) fn owned_by_hook() -> Option<OwnedByFn> {
@@ -127,6 +133,14 @@ pub fn scan(root: &Path) -> Result<Vec<elfinfo::Info>> {
     match *lock_slot(&SCAN) {
         Some(f) => f(root),
         None => elfinfo::scan(root),
+    }
+}
+
+/// Hooked `pacman -U`, or [`crate::pm::upgrade`].
+pub fn upgrade(pkg_path: &Path, noconfirm: bool) -> Result<()> {
+    match *lock_slot(&UPGRADE) {
+        Some(f) => f(pkg_path, noconfirm),
+        None => crate::pm::upgrade(pkg_path, noconfirm),
     }
 }
 
