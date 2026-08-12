@@ -33,7 +33,9 @@ pub fn data_dir() -> PathBuf {
         return dir;
     }
 
-    if let Some(user) = sudo_or_logname_user() {
+    // Only when invoked via sudo: prefer SUDO_USER; empty SUDO_USER → logname.
+    // Unset SUDO_USER is a normal (non-sudo) run — do not consult logname.
+    if let Some(user) = sudo_invoking_user() {
         if let Some(home) = home_for_user(&user) {
             return home.join(".local/share/packager/installed");
         }
@@ -121,13 +123,19 @@ fn record_path(pkgname: &str) -> PathBuf {
     data_dir().join(format!("{pkgname}.json"))
 }
 
-/// `SUDO_USER` if non-empty; otherwise `logname` if non-empty.
-fn sudo_or_logname_user() -> Option<String> {
-    if let Ok(u) = std::env::var("SUDO_USER") {
-        if !u.is_empty() {
-            return Some(u);
-        }
+/// User whose home should hold state under sudo.
+/// - `SUDO_USER` non-empty → that user
+/// - `SUDO_USER` set but empty → `logname` (sudo-path fallback)
+/// - `SUDO_USER` unset → `None` (normal run; use XDG/`HOME`)
+fn sudo_invoking_user() -> Option<String> {
+    match std::env::var("SUDO_USER") {
+        Ok(u) if !u.is_empty() => Some(u),
+        Ok(_) => logname_user(),
+        Err(_) => None,
     }
+}
+
+fn logname_user() -> Option<String> {
     let out = Command::new("logname").output().ok()?;
     if !out.status.success() {
         return None;
@@ -205,18 +213,34 @@ mod tests {
                     .and_then(|l| l.split(':').nth(5).map(|s| s.to_string()))
             })
             .unwrap_or_else(|| "/usr/share/empty".into());
+        let expected = PathBuf::from(&home).join(".local/share/packager/installed");
         std::env::set_var("SUDO_USER", "nobody");
         let d = data_dir();
         std::env::remove_var("SUDO_USER");
         let ds = d.to_string_lossy();
         assert!(!ds.contains("/root/"), "{ds}");
-        assert!(
-            ds.contains(home.trim_end_matches('/')),
-            "expected {home} in {ds}"
-        );
-        assert!(
-            ds.ends_with("packager/installed") || ds.contains("/packager/installed"),
-            "{ds}"
-        );
+        assert_eq!(d, expected, "expected {expected:?}, got {d:?}");
+    }
+
+    #[test]
+    fn data_dir_no_sudo_uses_xdg() {
+        set_data_dir_for_test(None);
+        let prev_sudo = std::env::var("SUDO_USER").ok();
+        let prev_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::remove_var("SUDO_USER");
+        let xdg = std::env::temp_dir().join(format!("packager-xdg-{}", std::process::id()));
+        std::env::set_var("XDG_DATA_HOME", &xdg);
+        let d = data_dir();
+        // restore env
+        match prev_sudo {
+            Some(v) => std::env::set_var("SUDO_USER", v),
+            None => std::env::remove_var("SUDO_USER"),
+        }
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+        set_data_dir_for_test(None);
+        assert_eq!(d, xdg.join("packager/installed"));
     }
 }
