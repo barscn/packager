@@ -35,11 +35,19 @@ fn fixture_deb() -> std::path::PathBuf {
     p
 }
 
+fn none_lookup() -> packager::lookup::Client {
+    fn n(_: &str) -> packager::error::Result<Option<packager::lookup::Hit>> {
+        Ok(None)
+    }
+    packager::lookup::Client { extra: n, aur: n }
+}
+
 #[test]
 fn system_install_then_forget_without_remove() {
     if !is_root() {
         panic!("rerun as root: cargo test --features system --test system");
     }
+    let _l = packager::hooks::set_lookup(none_lookup());
     let data = std::env::temp_dir().join(format!("packager-sysd-{}", std::process::id()));
     state::set_data_dir_for_test(Some(data.clone()));
     let deb = fixture_deb();
@@ -78,6 +86,7 @@ fn system_forget_with_remove() {
     if !is_root() {
         panic!("rerun as root: cargo test --features system --test system");
     }
+    let _l = packager::hooks::set_lookup(none_lookup());
     let data = std::env::temp_dir().join(format!("packager-sysd2-{}", std::process::id()));
     state::set_data_dir_for_test(Some(data.clone()));
     let deb = fixture_deb();
