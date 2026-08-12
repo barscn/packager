@@ -69,12 +69,12 @@ Vendor `postinst` / `%post` (and friends) are **never executed** during convert.
 ## Tests
 
 ```bash
-make test          # unit + library tests; no root, no pacman -U
-make test-system   # opt-in @system tests (feature "system"); must run as root
+make test                    # unit + library tests; no root, no pacman -U
+sudo -E make test-system     # opt-in @system tests (feature "system"); needs root and SUDO_USER
 ```
 
 `make test` sets `RUST_TEST_THREADS=1` and runs `cargo test --lib`. It does **not** compile or run the system integration tests.
 
-`make test-system` runs `cargo test --features system --test system` as root. As a normal user those tests **panic** (fail) on purpose so a non-root CI job cannot silently skip them.
+`make test-system` must be run as **`sudo -E make test-system`**. Root is required (`pacman -U` / `-R`), and **`SUDO_USER` must be set** so `makepkg` can drop privileges and state is written under the original user. A plain `sudo make test-system` (without `-E`) can drop `SUDO_USER` depending on sudoers. As a normal user those tests **panic** (fail) on purpose so a non-root CI job cannot silently skip them.
 
 Human smoke notes for real vendor packages live in [`docs/superpowers/plans/v1-system-smoke.md`](docs/superpowers/plans/v1-system-smoke.md). Do not commit vendor `.deb` / `.rpm` blobs.
