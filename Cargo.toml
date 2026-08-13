@@ -3,6 +3,9 @@ name = "packager"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/barscn/packager"
+description = "Turn a local .deb or .rpm into a pacman package on Arch"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

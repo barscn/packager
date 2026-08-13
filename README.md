@@ -8,7 +8,17 @@ Default path: preview → PKGBUILD → `makepkg` → `pacman -U`. Use `convert` 
 
 ## Install
 
-Arch Linux only. Runtime tools on `PATH`:
+Arch Linux only.
+
+```bash
+yay -S packager-git
+# or
+paru -S packager-git
+```
+
+Then `sudo pkgfile -u` if `pkgfile` has no database yet.
+
+Runtime tools on `PATH`:
 
 | Tool | Role |
 |---|---|
@@ -153,3 +163,7 @@ flowchart LR
     X -->|no| Y["Drop tracking only"]
     X -->|yes| Z["Uninstall, then drop tracking"]
 ```
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 Barışcan Aslan.
