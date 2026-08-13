@@ -11,9 +11,7 @@ Default path: preview → PKGBUILD → `makepkg` → `pacman -U`. Use `convert` 
 Arch Linux only.
 
 ```bash
-yay -S packager        # v0.1.0
-# or
-yay -S packager-git    # current main
+yay -S packager
 ```
 
 Then `sudo pkgfile -u` if `pkgfile` has no database yet.
