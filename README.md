@@ -6,9 +6,9 @@ Temporary bridge until extra or an AUR maintainer ships a native package. Not a 
 
 Default path: preview → PKGBUILD → `makepkg` → `pacman -U`. Use `convert` to stop before install, or `scaffold` to stop after the PKGBUILD.
 
-## Runtime tools
+## Install
 
-These must be on `PATH`:
+Arch Linux only. Runtime tools on `PATH`:
 
 | Tool | Role |
 |---|---|
@@ -18,20 +18,47 @@ These must be on `PATH`:
 | `makepkg` / `fakeroot` | Build the pacman package (no `-s`) |
 | `pacman` | `-U` / `-Q` / `-R` / ownership / extra sync DB |
 
-AUR lookups use the AUR RPC over the network; extra/multilib use the local pacman sync DB.
-
-## Build
-
 ```bash
-make build      # cargo build --release
-make release    # locked release binary (same profile as GitHub tag artifacts)
+sudo pacman -S --needed base-devel binutils pkgfile libarchive
+sudo pkgfile -u
 ```
 
-Binary: `target/release/packager` (or `target/debug/packager` after `cargo build`).
+AUR lookups use the AUR RPC (needs network). extra/multilib use the local pacman sync DB.
 
-Release profile (`Cargo.toml`): fat LTO, one codegen unit, stripped, `panic = abort`. Push a `v*` tag to publish a GitHub Release.
+### From source
+
+Needs Rust 1.75+ (`pacman -S rust` or rustup) and `git`.
+
+```bash
+git clone https://github.com/barscn/packager.git
+cd packager
+make release
+sudo install -Dm755 target/release/packager /usr/local/bin/packager
+```
+
+Or, with `~/.cargo/bin` on `PATH`:
+
+```bash
+cargo install --git https://github.com/barscn/packager --locked
+```
+
+A tagged GitHub Release ships the same `make release` binary (`packager` on `PATH` after unpacking).
 
 ## Usage
+
+Download a vendor `.deb` or `.rpm`, then:
+
+```bash
+sudo -E packager ./foo.deb     # preview → PKGBUILD → makepkg → pacman -U
+```
+
+`sudo -E` is required for `pacman -U`. `makepkg` then runs as `$SUDO_USER`. Preview prints first; Enter continues (`-y` skips the prompt).
+
+To build only:
+
+```bash
+packager convert ./foo.deb     # no root; archive under ~/.cache/packager/<pkg>-<ver>/
+```
 
 ```text
 packager foo.deb              # default = install
@@ -66,6 +93,15 @@ Vendor `postinst` / `%post` scripts are never executed during convert. By defaul
 - `makepkg -s` is not used
 - Lib path oddities (`/usr/lib/x86_64-linux-gnu`, `/usr/lib64`, …) are detected and warned; paths are **not** rewritten
 - State: `~/.local/share/packager/installed/<pkgname>.json` (original user when invoked via sudo)
+
+## Build
+
+```bash
+make build      # cargo build --release
+make release    # locked release binary (same profile as GitHub tag artifacts)
+```
+
+Binary: `target/release/packager`. Release profile: fat LTO, one codegen unit, stripped, `panic = abort`.
 
 ## Tests
 
