@@ -163,7 +163,3 @@ flowchart LR
     X -->|no| Y["Drop tracking only"]
     X -->|yes| Z["Uninstall, then drop tracking"]
 ```
-
-## License
-
-[MIT](LICENSE). Copyright (c) 2026 Barışcan Aslan.
