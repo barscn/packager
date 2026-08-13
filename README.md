@@ -2,7 +2,7 @@
 
 Arch Linux utility that turns a **local** `.deb` or `.rpm` into a real pacman package.
 
-It is a **temporary bridge** until extra or an AUR maintainer ships a native package. It is **not** a package manager, **not** an AUR helper (`yay`/`paru`), and **not** a bidirectional converter.
+Temporary bridge until extra or an AUR maintainer ships a native package. Not a package manager, not an AUR helper (`yay`/`paru`), and not a bidirectional converter.
 
 Default path: preview → PKGBUILD → `makepkg` → `pacman -U`. Use `convert` to stop before install, or `scaffold` to stop after the PKGBUILD.
 
@@ -50,18 +50,18 @@ packager forget <pkg>         # stop tracking; ask whether to pacman -R
 | Flag | Effect |
 |---|---|
 | `--force` | Continue if extra/AUR already has a match, or if packaged files would overwrite another package’s files |
-| `--allow-scripts` | Copy vendor scripts into a pacman `.install` (pacman runs them on `-U`; we never run them during convert) |
+| `--allow-scripts` | Copy vendor scripts into a pacman `.install` (pacman runs them on `-U`; it never runs them during convert) |
 | `--yes` / `-y` | Skip the confirm prompt after preview; also allows `pacman --noconfirm` on the action you asked for |
 | `--workdir DIR` | Where to put the PKGBUILD and built package (default: `~/.cache/packager/<pkg>-<ver>/`) |
 
 ### Script policy
 
-Vendor `postinst` / `%post` (and friends) are **never executed** during convert. By default they are left out of the package. Only with `--allow-scripts` are they packaged as `.install` so **pacman** can run them on `-U`. We do not rewrite `update-alternatives`, `update-rc.d`, `debconf`, or RPM scriptlet helpers into Arch.
+Vendor `postinst` / `%post` scripts are never executed during convert. By default they are left out of the package. Only with `--allow-scripts` are they packaged as `.install` so pacman can run them on `-U`. It does not rewrite `update-alternatives`, `update-rc.d`, `debconf`, or RPM scriptlet helpers into Arch.
 
-### Other policies (v1)
+### Policies
 
 - Native extra/AUR match → hard stop unless `--force`
-- Offline / failed lookup → hard stop unless `--force` (we never claim “no native package” when we could not check)
+- Offline / failed lookup → hard stop unless `--force` (it never claims “no native package” when lookup failed)
 - Unmapped depends are omitted from the PKGBUILD (not invented)
 - `makepkg -s` is not used
 - Lib path oddities (`/usr/lib/x86_64-linux-gnu`, `/usr/lib64`, …) are detected and warned; paths are **not** rewritten
@@ -76,9 +76,9 @@ sudo -E make test-system     # opt-in @system tests (feature "system"); needs ro
 
 `make test` sets `RUST_TEST_THREADS=1` and runs `cargo test --lib`. It does **not** compile or run the system integration tests.
 
-`make test-system` must be run as **`sudo -E make test-system`**. Root is required (`pacman -U` / `-R`), and **`SUDO_USER` must be set** so `makepkg` can drop privileges and state is written under the original user. A plain `sudo make test-system` (without `-E`) can drop `SUDO_USER` depending on sudoers. As a normal user those tests **panic** (fail) on purpose so a non-root CI job cannot silently skip them.
+`make test-system` must be run as `sudo -E make test-system`. Root is required (`pacman -U` / `-R`), and `SUDO_USER` must be set so `makepkg` can drop privileges and state is written under the original user. A plain `sudo make test-system` (without `-E`) can drop `SUDO_USER`. Those tests panic if not root.
 
-Human smoke notes for real vendor packages live in [`docs/superpowers/plans/v1-system-smoke.md`](docs/superpowers/plans/v1-system-smoke.md). Do not commit vendor `.deb` / `.rpm` blobs.
+Do not commit vendor `.deb` / `.rpm` blobs.
 
 ## How it works
 
@@ -103,8 +103,6 @@ flowchart TD
     O -->|install| Q["pacman -U"]
     Q --> R["Record state JSON"]
 ```
-
-Vendor `postinst` / `%post` scripts are never run during convert. They stay in `scripts.orig/`; only `--allow-scripts` copies them into a pacman `.install` so **pacman** can run them on `-U`.
 
 After a successful install, `status` checks whether extra or the AUR now has a native package, and `forget` drops tracking (optionally `pacman -R`):
 

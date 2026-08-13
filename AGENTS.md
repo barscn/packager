@@ -2,11 +2,7 @@
 
 For coding agents. Humans: `README.md`.
 
-Policy source: `docs/superpowers/specs/2026-08-12-packager-design.md`.
-Implementation history: `docs/superpowers/plans/2026-08-12-packager.md`.
-Host smoke (no vendor blobs): `docs/superpowers/plans/v1-system-smoke.md`.
-
-Do not fork policy into this file. If a change moves a default, stop, or CLI contract, update the spec in the same change. Update `README.md` only when user-facing commands/flags change.
+This file is the policy source. Update `README.md` only when user-facing commands/flags change.
 
 ## Repo
 
