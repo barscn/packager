@@ -271,7 +271,13 @@ fn pipeline(cfg: &Config, convert: bool) -> i32 {
         }),
     });
 
-    print!("{}", preview::format_report(&report));
+    let color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+        && std::env::var_os("NO_COLOR").is_none();
+    if color {
+        print!("{}", preview::format_report_colored(&report));
+    } else {
+        print!("{}", preview::format_report(&report));
+    }
 
     if report.verdict == preview::Verdict::Blocked {
         return 1;
