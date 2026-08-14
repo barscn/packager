@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
-    pub cmd: String, // install|convert|scaffold|status|forget
+    pub cmd: String, // install|convert|scaffold|status|forget|help
     pub file: Option<PathBuf>,
     pub pkg: Option<String>,
     pub force: bool,
@@ -27,6 +27,37 @@ pub struct Config {
 /// Optional handler invoked after a successful parse (tests / later pipeline).
 pub static HANDLE: Mutex<Option<fn(&Config) -> i32>> = Mutex::new(None);
 
+fn usage(detail: &str) -> Error {
+    Error::msg(format!(
+        "{detail}\ntry 'packager --help' for more information"
+    ))
+}
+
+fn help_text() -> &'static str {
+    "\
+Usage: packager [OPTIONS] [COMMAND] [ARG]
+
+Turn a local .deb or .rpm into a pacman package.
+
+Commands:
+  install <file>    Preview, build, and pacman -U (default)
+  convert <file>    Preview and makepkg; do not install
+  scaffold <file>   Write PKGBUILD only
+  status            List tracked converts
+  forget <pkg>      Stop tracking; ask whether to pacman -R
+
+Options:
+  -h, --help           Show this help
+  -y, --yes            Skip preview confirm; allow pacman --noconfirm
+      --force          Continue on extra/AUR match or file conflict
+      --allow-scripts  Copy vendor scripts into a pacman .install
+      --workdir DIR    Output dir (default ~/.cache/packager/<pkg>-<ver>/)
+
+A path ending in .deb or .rpm with no command is treated as install.
+install needs root (sudo -E) so pacman -U can run; makepkg drops to $SUDO_USER.
+"
+}
+
 pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Config> {
     let mut force = false;
     let mut allow_scripts = false;
@@ -37,17 +68,28 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Config> {
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--help" | "-h" => {
+                return Ok(Config {
+                    cmd: "help".into(),
+                    file: None,
+                    pkg: None,
+                    force: false,
+                    allow_scripts: false,
+                    yes: false,
+                    workdir: None,
+                });
+            }
             "--force" => force = true,
             "--allow-scripts" => allow_scripts = true,
             "--yes" | "-y" => yes = true,
             "--workdir" => {
                 let dir = iter
                     .next()
-                    .ok_or_else(|| Error::msg("usage: --workdir requires DIR"))?;
+                    .ok_or_else(|| usage("usage: --workdir requires DIR"))?;
                 workdir = Some(PathBuf::from(dir));
             }
             s if s.starts_with('-') => {
-                return Err(Error::msg(format!("unknown flag: {s}")));
+                return Err(usage(&format!("unknown flag: {s}")));
             }
             _ => positionals.push(arg),
         }
@@ -56,27 +98,27 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Config> {
     let mut pos = positionals.into_iter();
     let first = pos
         .next()
-        .ok_or_else(|| Error::msg("usage: packager [install|convert|scaffold|status|forget] …"))?;
+        .ok_or_else(|| usage("usage: packager [install|convert|scaffold|status|forget] …"))?;
 
     let (cmd, file, pkg) = match first.as_str() {
         "install" | "convert" | "scaffold" => {
             let f = pos
                 .next()
-                .ok_or_else(|| Error::msg(format!("usage: packager {first} <file.deb|.rpm>")))?;
+                .ok_or_else(|| usage(&format!("usage: packager {first} <file.deb|.rpm>")))?;
             (first, Some(PathBuf::from(f)), None)
         }
         "status" => (first, None, None),
         "forget" => {
             let name = pos
                 .next()
-                .ok_or_else(|| Error::msg("usage: packager forget <pkg>"))?;
+                .ok_or_else(|| usage("usage: packager forget <pkg>"))?;
             (first, None, Some(name))
         }
         s if s.ends_with(".deb") || s.ends_with(".rpm") => {
             ("install".into(), Some(PathBuf::from(first)), None)
         }
         _ => {
-            return Err(Error::msg(
+            return Err(usage(
                 "usage: packager [install|convert|scaffold|status|forget] …",
             ));
         }
@@ -100,6 +142,10 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> i32 {
             2
         }
         Ok(cfg) => {
+            if cfg.cmd == "help" {
+                print!("{}", help_text());
+                return 0;
+            }
             if let Some(f) = *HANDLE.lock().unwrap() {
                 return f(&cfg);
             }
@@ -382,6 +428,53 @@ mod tests {
     #[test]
     fn parse_missing_file() {
         assert!(parse_args(["scaffold".into()]).is_err());
+    }
+
+    #[test]
+    fn help_flags_exit_zero() {
+        assert_eq!(run(["--help".into()]), 0);
+        assert_eq!(run(["-h".into()]), 0);
+        assert_eq!(parse_args(["--help".into()]).unwrap().cmd, "help");
+        assert_eq!(parse_args(["-h".into()]).unwrap().cmd, "help");
+        assert_eq!(
+            parse_args(["convert".into(), "--help".into()]).unwrap().cmd,
+            "help"
+        );
+    }
+
+    #[test]
+    fn help_text_lists_commands_and_flags() {
+        let t = help_text();
+        for needle in [
+            "Usage:",
+            "install",
+            "convert",
+            "scaffold",
+            "status",
+            "forget",
+            "--force",
+            "--allow-scripts",
+            "--yes",
+            "-y",
+            "--workdir",
+            "--help",
+            "-h",
+        ] {
+            assert!(t.contains(needle), "missing {needle}");
+        }
+        // help is a flag, not a command
+        assert!(!t.lines().any(|l| {
+            let s = l.trim_start();
+            s.starts_with("help ") || s == "help"
+        }));
+    }
+
+    #[test]
+    fn help_is_not_a_subcommand() {
+        let err = parse_args(["help".into()]).unwrap_err().to_string();
+        assert!(err.contains("usage:"));
+        assert!(err.contains("--help") || err.contains("-h"));
+        assert_eq!(run(["help".into()]), 2);
     }
 
     fn write_hello_deb() -> PathBuf {
