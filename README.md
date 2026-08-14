@@ -41,8 +41,10 @@ Needs Rust 1.75+ (`pacman -S rust` or rustup) and `git`.
 git clone https://github.com/barscn/packager.git
 cd packager
 make release
-sudo install -Dm755 target/release/packager /usr/local/bin/packager
+sudo make install
 ```
+
+Installs to `/usr/local/bin` (`PREFIX` / `DESTDIR` override). `make uninstall` removes it.
 
 Or, with `~/.cargo/bin` on `PATH`:
 
@@ -107,6 +109,7 @@ Vendor `postinst` / `%post` scripts are never executed during convert. By defaul
 ```bash
 make build      # cargo build --release
 make release    # locked release binary (same profile as GitHub tag artifacts)
+make install    # copy target/release/packager to $(PREFIX)/bin (default /usr/local)
 ```
 
 Binary: `target/release/packager`. Release profile: fat LTO, one codegen unit, stripped, `panic = abort`.
