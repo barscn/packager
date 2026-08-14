@@ -86,6 +86,7 @@ packager forget <pkg>         # stop tracking; ask whether to pacman -R
 
 | Flag | Effect |
 |---|---|
+| `-h` / `--help` | Print the command summary and exit |
 | `--force` | Continue if extra/AUR already has a match, or if packaged files would overwrite another package’s files |
 | `--allow-scripts` | Copy vendor scripts into a pacman `.install` (pacman runs them on `-U`; it never runs them during convert) |
 | `--yes` / `-y` | Skip the confirm prompt after preview; also allows `pacman --noconfirm` on the action you asked for |
