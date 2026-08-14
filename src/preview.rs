@@ -130,46 +130,78 @@ fn first_command_token(body: &str) -> Option<&str> {
 }
 
 pub fn format_report(r: &Report) -> String {
-    let mut out = String::new();
+    format_report_with(r, false)
+}
 
-    out.push_str(&format!("source: {}  ({})\n", r.source, r.format.as_str()));
+pub fn format_report_colored(r: &Report) -> String {
+    format_report_with(r, true)
+}
 
-    let arch_s = r.arch.map(|a| a.as_str()).unwrap_or("unknown");
-    out.push_str(&format!(
-        "pkgname: {}  {}-{}  {}\n",
-        r.pkgname, r.pkgver, r.pkgrel, arch_s
-    ));
+const RESET: &str = "\x1b[0m";
+const DIM: &str = "\x1b[2m";
+const BOLD_RED: &str = "\x1b[1;31m";
+const BOLD_YELLOW: &str = "\x1b[1;33m";
+const BOLD_GREEN: &str = "\x1b[1;32m";
+const YELLOW: &str = "\x1b[33m";
 
-    if r.lookup_err.is_some() {
-        out.push_str("native: lookup failed\n");
-    } else if !r.native.is_empty() {
-        let parts: Vec<String> = r
-            .native
-            .iter()
-            .map(|h| format!("{}/{} {}", h.repo, h.name, h.version))
-            .collect();
-        out.push_str(&format!("native: {}\n", parts.join(", ")));
+fn paint(on: bool, code: &str, s: &str) -> String {
+    if on {
+        format!("{code}{s}{RESET}")
     } else {
-        out.push_str("native: no extra/AUR match\n");
+        s.to_string()
     }
+}
+
+fn value_sgr(r: &Report, key: &str) -> Option<&'static str> {
+    match key {
+        "verdict" => Some(match r.verdict {
+            Verdict::Blocked => BOLD_RED,
+            Verdict::ProceedWarnings => BOLD_YELLOW,
+            Verdict::Proceed => BOLD_GREEN,
+        }),
+        "native" if r.lookup_err.is_some() => Some(BOLD_RED),
+        "native" if !r.native.is_empty() => Some(BOLD_YELLOW),
+        "unmapped" | "scripts" | "layout" | "conflicts" => Some(YELLOW),
+        _ => None,
+    }
+}
+
+fn format_report_with(r: &Report, color: bool) -> String {
+    let rows = report_rows(r);
+    let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    let mut out = String::new();
+    if let Some((key, value)) = rows.first() {
+        out.push_str(&align_line(r, key, value, width, color));
+        out.push('\n');
+        out.push('\n');
+    }
+    for (key, value) in rows.iter().skip(1) {
+        out.push_str(&align_line(r, key, value, width, color));
+        out.push('\n');
+    }
+    out
+}
+
+fn report_rows(r: &Report) -> Vec<(&'static str, String)> {
+    let mut rows = Vec::new();
+    rows.push(("verdict", verdict_text(r)));
+    rows.push(("source", format!("{}  ({})", r.source, r.format.as_str())));
+    let arch_s = r.arch.map(|a| a.as_str()).unwrap_or("unknown");
+    rows.push((
+        "pkgname",
+        format!("{}  {}-{}  {}", r.pkgname, r.pkgver, r.pkgrel, arch_s),
+    ));
+    rows.push(("native", native_text(r)));
 
     let mut deps = r.depends.extra.clone();
     deps.extend(r.depends.aur.iter().cloned());
-    if deps.is_empty() {
-        out.push_str("depends: (none)\n");
-    } else {
-        out.push_str(&format!("depends: {}\n", deps.join(", ")));
+    if !deps.is_empty() {
+        rows.push(("depends", deps.join(", ")));
     }
-
-    if r.depends.unmapped.is_empty() {
-        out.push_str("unmapped: (none)\n");
-    } else {
-        out.push_str(&format!("unmapped: {}\n", r.depends.unmapped.join(", ")));
+    if !r.depends.unmapped.is_empty() {
+        rows.push(("unmapped", r.depends.unmapped.join(", ")));
     }
-
-    if r.scripts.is_empty() {
-        out.push_str("scripts: (none)\n");
-    } else {
+    if !r.scripts.is_empty() {
         let fate = if r.allow_scripts {
             "will become .install"
         } else {
@@ -183,27 +215,22 @@ pub fn format_report(r: &Report) -> String {
                 format!("{} ({})", s.name, cmd)
             })
             .collect();
-        out.push_str(&format!(
-            "scripts: {} {} — {}\n",
-            r.scripts.len(),
-            parts.join(", "),
-            fate
+        rows.push((
+            "scripts",
+            format!("{} {} — {}", r.scripts.len(), parts.join(", "), fate),
         ));
     }
-
-    if r.layout.is_empty() {
-        out.push_str("layout: (none)\n");
-    } else {
-        out.push_str(&format!("layout: {}\n", r.layout.join("; ")));
+    if !r.layout.is_empty() {
+        rows.push(("layout", r.layout.join("; ")));
     }
-
-    if r.conflicts.is_empty() {
-        out.push_str("conflicts: (none)\n");
-    } else {
-        out.push_str(&format!("conflicts: {}\n", r.conflicts.join(", ")));
+    if !r.conflicts.is_empty() {
+        rows.push(("conflicts", r.conflicts.join(", ")));
     }
+    rows
+}
 
-    let v = match r.verdict {
+fn verdict_text(r: &Report) -> String {
+    match r.verdict {
         Verdict::Proceed => "proceed".to_string(),
         Verdict::ProceedWarnings => "proceed with warnings".to_string(),
         Verdict::Blocked => {
@@ -213,10 +240,31 @@ pub fn format_report(r: &Report) -> String {
                 format!("blocked ({})", r.block_reason)
             }
         }
-    };
-    out.push_str(&format!("verdict: {v}\n"));
+    }
+}
 
-    out
+fn native_text(r: &Report) -> String {
+    if r.lookup_err.is_some() {
+        "lookup failed".into()
+    } else if !r.native.is_empty() {
+        r.native
+            .iter()
+            .map(|h| format!("{}/{} {}", h.repo, h.name, h.version))
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        "no extra/AUR match".into()
+    }
+}
+
+fn align_line(r: &Report, key: &str, value: &str, width: usize, color: bool) -> String {
+    let pad = width + 2 - key.len() - 1;
+    let label = paint(color, DIM, &format!("{key}:"));
+    let value = match value_sgr(r, key) {
+        Some(code) => paint(color, code, value),
+        None => value.to_string(),
+    };
+    format!("{label}{}{value}", " ".repeat(pad))
 }
 
 #[cfg(test)]
@@ -331,6 +379,10 @@ mod tests {
         assert_ne!(r.verdict, Verdict::Blocked);
     }
 
+    fn first_content_line(text: &str) -> &str {
+        text.lines().find(|l| !l.is_empty()).unwrap_or("")
+    }
+
     #[test]
     fn format_fields() {
         let p = base_pkg();
@@ -344,13 +396,57 @@ mod tests {
             "native:",
             "depends:",
             "unmapped:",
-            "scripts:",
-            "layout:",
-            "conflicts:",
             "verdict:",
         ] {
             assert!(text.contains(prefix), "missing {prefix} in\n{text}");
         }
+        assert!(!text.contains("scripts:"), "{text}");
+        assert!(!text.contains("layout:"), "{text}");
+        assert!(!text.contains("conflicts:"), "{text}");
+        assert!(!text.contains("(none)"), "{text}");
+    }
+
+    #[test]
+    fn format_omits_empty_optional_fields() {
+        let text = format_report(&evaluate(base_in(&base_pkg())));
+        assert!(text.contains("verdict:"));
+        assert!(text.contains("source:"));
+        assert!(text.contains("pkgname:"));
+        assert!(text.contains("native:"));
+        assert!(!text.contains("depends:"), "{text}");
+        assert!(!text.contains("unmapped:"), "{text}");
+        assert!(!text.contains("scripts:"), "{text}");
+        assert!(!text.contains("layout:"), "{text}");
+        assert!(!text.contains("conflicts:"), "{text}");
+        assert!(!text.contains("(none)"), "{text}");
+    }
+
+    #[test]
+    fn format_verdict_first_then_blank_then_source() {
+        let text = format_report(&evaluate(base_in(&base_pkg())));
+        assert!(first_content_line(&text).starts_with("verdict:"), "{text}");
+        let mut lines = text.lines();
+        assert!(lines.next().unwrap().starts_with("verdict:"));
+        assert_eq!(lines.next(), Some(""));
+        assert!(lines.next().unwrap().starts_with("source:"));
+    }
+
+    #[test]
+    fn format_aligns_values() {
+        let text = format_report(&evaluate(base_in(&base_pkg())));
+        let expected = "\
+verdict: proceed\n\
+\n\
+source:  foo.deb  (deb)\n\
+pkgname: foo  1.0-1  x86_64\n\
+native:  no extra/AUR match\n";
+        assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn format_report_is_colorless() {
+        let text = format_report(&evaluate(base_in(&base_pkg())));
+        assert!(!text.contains('\u{1b}'), "{text:?}");
     }
 
     #[test]
@@ -359,7 +455,8 @@ mod tests {
         let mut inn = base_in(&p);
         inn.lookup_err = Some("offline".into());
         let text = format_report(&evaluate(inn));
-        assert!(text.contains("native: lookup failed"), "{text}");
+        assert!(text.contains("native:"), "{text}");
+        assert!(text.contains("lookup failed"), "{text}");
         assert!(!text.contains("no extra/AUR match"), "{text}");
         assert!(!text.contains("no native package"), "{text}");
     }
@@ -374,5 +471,64 @@ mod tests {
         let text = format_report(&evaluate(base_in(&p)));
         assert!(text.contains("update-desktop-database"), "{text}");
         assert!(text.contains("will not be packaged"), "{text}");
+    }
+
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut it = s.chars().peekable();
+        while let Some(c) = it.next() {
+            if c == '\u{1b}' && it.peek() == Some(&'[') {
+                it.next();
+                for x in it.by_ref() {
+                    if x.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn format_colored_blocked_uses_sgr_and_strips_to_plain() {
+        let p = base_pkg();
+        let mut inn = base_in(&p);
+        inn.native = vec![lookup::Hit {
+            name: "foo".into(),
+            version: "2".into(),
+            repo: "extra".into(),
+        }];
+        let r = evaluate(inn);
+        let plain = format_report(&r);
+        let colored = format_report_colored(&r);
+        assert!(colored.contains('\u{1b}'), "{colored:?}");
+        assert!(
+            colored.contains("31"),
+            "blocked should be red:\n{colored:?}"
+        );
+        assert!(
+            colored.contains("2m") || colored.contains("[2m"),
+            "labels dim:\n{colored:?}"
+        );
+        assert_eq!(strip_ansi(&colored), plain);
+        assert!(!plain.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn format_colored_lookup_fail_keeps_wording() {
+        let p = base_pkg();
+        let mut inn = base_in(&p);
+        inn.lookup_err = Some("offline".into());
+        let r = evaluate(inn);
+        let colored = format_report_colored(&r);
+        let text = strip_ansi(&colored);
+        assert!(
+            text.contains("native:") && text.contains("lookup failed"),
+            "{text}"
+        );
+        assert!(!text.contains("no extra/AUR match"), "{text}");
+        assert!(!text.contains("no native package"), "{text}");
     }
 }
